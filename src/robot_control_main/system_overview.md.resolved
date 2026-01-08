@@ -1,0 +1,80 @@
+# System Overview: Robot Control System
+
+## 1. Introduction
+This document provides a comprehensive overview of the Robot Control System designed for automated handling, filling, and weighing of cartridges. The system integrates a **Dobot Magician** robot arm with a camera system (Cognex/Webcam), a precision scale, and a PLC-controlled filling machine.
+
+The core logic is implemented in ROS 2 (C++) within the `robot_control_main` package.
+
+## 2. System Architecture
+
+### Hardware Components
+*   **Robot Arm:** Dobot Magician (6-axis control via `JointMovJ`).
+*   **Vision System:** Dual Camera Setup (Input Tray & Output Tray) + YOLO for object detection.
+*   **Scale:** Precision balance communicating via Serial/ROS Topic.
+*   **PLC/Machine:** Controls the filling process (RevPi integration).
+*   **IO:** Gripper control, digital signals for machine synchronization.
+
+### Software Stack
+*   **Framework:** ROS 2 Humble (Linux).
+*   **Core Node:** `robot_logic_node` (State Machine).
+*   **Communication:**
+    *   **Topics:** `/scale/result`, `/revpi/new_tray_loaded`, `/fill_machine/fill_done`, `/robot/status`.
+    *   **Services:** `/robot/enable_system`, `/robot/emergency_stop`.
+
+## 3. Operational Logic (State Machine)
+
+The system operates as a **Finite State Machine (FSM)** with the following key states:
+
+### A. Initialization & Input
+*   **IDLE:** Verification of system enablement.
+*   **INIT_CHECK:** Verifies input tray and buffer status.
+*   **INIT_LOAD_CHAMBER:** Loads the first cartridge into the filling chamber.
+
+### B. Core Loop (Filling & Processing)
+1.  **WAIT_FILLING:**
+    *   Waits for the filling machine to complete (`/fill_machine/fill_done`).
+    *   *Constraint:* Must receive `fill_done` signal to proceed.
+2.  **TAKE_CHAMBER_TO_SCALE:**
+    *   Moves filled cartridge from Chamber to Scale.
+    *   Moves next cartridge from Buffer to Chamber (Concurrent loading).
+3.  **PROCESSING_SCALE:**
+    *   **Timeout:** Waits up to **30 seconds** for a valid weight result.
+    *   **Logic:**
+        *   **PASS:** Weight is within tolerance.
+        *   **FAIL:** Weight is out of tolerance.
+        *   **TIMEOUT:** Error state `ERROR_SCALE_TIMEOUT` (Auto-resume available).
+4.  **PLACEMENT:**
+    *   **PLACE_TO_OUTPUT:** If PASS, places cartridge in the output tray (Auto/AI slot selection).
+    *   **PLACE_TO_FAIL:** If FAIL, discards cartridge associated with failure.
+5.  **LOOP RETURN:**
+    *   From Placement, system transitions back to **WAIT_FILLING** to synchronize with the next filled cartridge.
+
+### C. Resource Management
+*   **REFILL_BUFFER:** If the internal buffer is empty, the robot fetches a new cartridge from the Input Tray.
+*   **NEW TRAY:** When Input Tray is empty, system waits for `/revpi/new_tray_loaded` signal (Manual or Auto reset).
+
+## 4. Key Features & Constraints
+
+| Feature | Description |
+| :--- | :--- |
+| **Timeout Protection** | Scale processing has a hard 30s timeout to prevent deadlocks. |
+| **Auto-Resume** | If scale result arrives late (during timeout error), system auto-recovers. |
+| **Sync Logic** | Strict synchronization: Must wait for `fill_done` after every placement. |
+| **Flag Management** | Auto-reset of `fill_done` and `new_tray_loaded` flags to ensure reliable continuous looping. |
+| **Modes** | Supports **AUTO** (Sequential) and **AI** (Vision-based) operation modes. |
+
+## 5. Topics & Interfaces
+
+### Subscriptions (Inputs)
+*   `/revpi/new_tray_loaded` (`std_msgs/Bool`): Trigger new input batch.
+*   `/fill_machine/fill_done` (`std_msgs/Bool`): Synchronization signal.
+*   `/scale/result` (`std_msgs/Bool`): Weight verification (True=Pass, False=Fail).
+*   `/robot/set_mode` (`std_msgs/Int32`): Switch between Auto/AI/Manual.
+
+### Publications (Outputs)
+*   `/robot/status` (`std_msgs/String`): Current FSM State.
+*   `/robot/error` (`std_msgs/String`): Error reporting.
+*   `/revpi/feed_chamber` (`std_msgs/Bool`): Command to machine.
+
+---
+*Last Updated: 2026-01-07*

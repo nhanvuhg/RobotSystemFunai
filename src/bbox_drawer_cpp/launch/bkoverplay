@@ -1,0 +1,32 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def generate_launch_description():
+    launch_args = [
+        DeclareLaunchArgument('image_topic', default_value='/ai/image_overlay', description='Shared CSI active image topic'),
+        DeclareLaunchArgument('cam1_boxes_topic', default_value='/cam1/yolo/bounding_boxes', description='Bounding boxes topic for cam1'),
+        DeclareLaunchArgument('cam2_boxes_topic', default_value='/cam2/yolo/bounding_boxes', description='Bounding boxes topic for cam2'),
+        DeclareLaunchArgument('active_id_topic', default_value='/camera/active_id', description='Topic that reports active camera id'),
+        DeclareLaunchArgument('output_topic', default_value='/active/image_overlay', description='Overlay output topic'),
+    ]
+
+    node = Node(
+        package='bbox_drawer_cpp',
+        executable='overlay_bboxes_node',
+        name='active_overlay',
+        output='screen',
+        parameters=[{
+            'image_topic': LaunchConfiguration('image_topic'),
+            'cam1_boxes_topic': LaunchConfiguration('cam1_boxes_topic'),
+            'cam2_boxes_topic': LaunchConfiguration('cam2_boxes_topic'),
+            'active_id_topic': LaunchConfiguration('active_id_topic'),
+            'output_topic': LaunchConfiguration('output_topic'),
+            'output_width':  640,
+            'output_height': 480,
+        }]
+    )
+
+    return LaunchDescription(launch_args + [node])

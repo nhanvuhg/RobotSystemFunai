@@ -1,0 +1,17 @@
+<RCC>
+    <qresource prefix="/qml">
+        <file alias="Main.qml">qml/Main.qml</file>
+        <file alias="CameraView.qml">qml/CameraView.qml</file>
+        <file alias="frm_settings.qml">qml/frm_settings.qml</file>
+    </qresource>
+    <qresource prefix="/icons">
+        <file>qml/icons/rynan_logo.png</file>
+
+        <file>qml/icons/power_settings.svg</file>
+        <file>qml/icons/settings.svg</file>
+        <file>qml/icons/schedule.svg</file>
+        <file>qml/icons/app_badging.svg</file>
+        <file>qml/icons/stop-mini-line.svg</file>
+        <file>qml/icons/pause-mini-line.svg</file>
+    </qresource>
+</RCC>

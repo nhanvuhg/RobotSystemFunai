@@ -1,0 +1,51 @@
+
+# ROS2 build artifacts
+
+build/
+
+install/
+
+log/
+
+logs/
+
+# Python
+
+__pycache__/
+
+*.py[cod]
+
+venv*/
+
+*.pyc
+
+# Log files
+
+*.log
+
+# Backup files
+
+*.bak
+
+*.backup
+
+*.old
+
+*_backup_*
+
+backup_*/
+
+*.cpp.bk
+
+*.cpp.bak_*
+
+*.bk
+
+*.bk2
+
+# IDE
+
+.vscode/
+
+.idea/
+

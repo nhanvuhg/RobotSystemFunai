@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd"
+            schematypens="http://www.w3.org/2001/XMLSchema"?>
+
+<package format="3">
+  <name>bbox_drawer_cpp</name>
+  <version>0.0.6</version>
+
+  <description>
+    Draw YOLO bounding boxes for multi-camera using C++ and OpenCV
+    (ROS2, supports YUV422/YUYV and BGR images)
+  </description>
+
+  <maintainer email="user@example.com">user</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- Build system -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- Dependencies (build + exec) -->
+  <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
+  <depend>vision_msgs</depend>
+  <depend>image_transport</depend>
+  <depend>message_filters</depend>
+  <depend>cv_bridge</depend>
+  <depend>camera_info_manager</depend>
+  <depend>opencv</depend>
+
+  <!-- Tests -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

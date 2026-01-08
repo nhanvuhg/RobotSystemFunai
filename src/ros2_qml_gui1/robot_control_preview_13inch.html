@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Robot Control - 13.3" Display Preview</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #0d1117;
+            color: #e2e8f0;
+            overflow: hidden;
+        }
+
+        .main-window {
+            width: 1920px;
+            height: 1080px;
+            background: #0d1117;
+            transform-origin: top left;
+        }
+
+        /* Header */
+        .header {
+            height: 80px;
+            background: transparent;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+        }
+
+        .logo {
+            width: 50px;
+            height: 50px;
+            background: #6cf;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .title {
+            flex: 1;
+            text-align: center;
+            font-size: 24px;
+            font-weight: bold;
+            color: #6cf;
+        }
+
+        .header-buttons {
+            display: flex;
+            gap: 10px;
+        }
+
+        .header-btn {
+            width: 50px;
+            height: 50px;
+            background: transparent;
+            border: 2px solid #134357;
+            border-radius: 6px;
+            cursor: pointer;
+            color: #6cf;
+            font-size: 20px;
+        }
+
+        /* Main Content */
+        .main-content {
+            height: calc(1080px - 80px - 40px);
+            display: flex;
+            gap: 10px;
+            padding: 0 10px;
+        }
+
+        /* Camera Area */
+        .camera-area {
+            flex: 3.2;
+            background: #081e29;
+            border: 1px solid #134357;
+            border-radius: 6px;
+            padding: 15px;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .camera-view {
+            background: #0d1117;
+            border: 2px solid #134357;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #94a3b8;
+            font-size: 18px;
+        }
+
+        /* Control Panel */
+        .control-panel {
+            flex: 1;
+            background: #081e29;
+            border: 1px solid #134357;
+            border-radius: 6px;
+            padding: 10px;
+            overflow-y: auto;
+            max-width: 450px;
+        }
+
+        .control-panel::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .control-panel::-webkit-scrollbar-track {
+            background: #0d1117;
+            border-radius: 3px;
+        }
+
+        .control-panel::-webkit-scrollbar-thumb {
+            background: #134357;
+            border-radius: 3px;
+        }
+
+        .panel-title {
+            text-align: center;
+            color: #5cf4f1;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .divider {
+            height: 1px;
+            background: #134357;
+            margin: 10px 0;
+        }
+
+        .section-title {
+            color: #94a3b8;
+            font-size: 13px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+
+        .status-label {
+            color: #94a3b8;
+        }
+
+        .status-value {
+            color: #10b981;
+            font-weight: bold;
+            text-align: right;
+        }
+
+        .status-value.row {
+            color: #6366f1;
+        }
+
+        .status-value.slot {
+            color: #6366f1;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 10px;
+            border: 2px solid;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-bottom: 6px;
+        }
+
+        .btn:active {
+            transform: scale(0.98);
+        }
+
+        .btn-enable {
+            background: #10b981;
+            border-color: #10b981;
+            color: white;
+        }
+
+        .btn-disable {
+            background: #64748b;
+            border-color: #64748b;
+            color: white;
+        }
+
+        .btn-danger {
+            background: #ef4444;
+            border-color: #ef4444;
+            color: white;
+        }
+
+        .btn-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            margin-bottom: 10px;
+        }
+
+        .btn-mode {
+            background: #6366f1;
+            border-color: #6366f1;
+            color: white;
+            padding: 9px;
+        }
+
+        .btn-mode.ai {
+            background: #8b5cf6;
+            border-color: #8b5cf6;
+        }
+
+        .btn-camera {
+            background: #06b6d4;
+            border-color: #06b6d4;
+            color: white;
+            padding: 9px;
+        }
+
+        .grid-5 {
+            display: grid;
+            grid-template-columns: repeat(5, 1fr);
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+
+        .grid-4 {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 4px;
+            margin-bottom: 10px;
+        }
+
+        .btn-small {
+            padding: 8px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: bold;
+            cursor: pointer;
+            border: 2px solid;
+            transition: all 0.2s;
+        }
+
+        .btn-row-select {
+            background: #fbbf24;
+            border-color: #f59e0b;
+            color: #0d1117;
+        }
+
+        .btn-slot-select {
+            background: #2dd4bf;
+            border-color: #14b8a6;
+            color: #0d1117;
+        }
+
+        /* Footer */
+        .footer {
+            height: 40px;
+            background: #0d2538;
+            border-top: 1px solid #134357;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            font-size: 14px;
+        }
+
+        .footer-left {
+            color: #6cf;
+        }
+
+        .footer-right {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background: #00ff99;
+            border-radius: 50%;
+        }
+
+        /* Scale for smaller screens */
+        @media (max-width: 1920px) {
+            .main-window {
+                transform: scale(0.8);
+            }
+        }
+
+        @media (max-width: 1536px) {
+            .main-window {
+                transform: scale(0.6);
+            }
+        }
+
+        @media (max-width: 1152px) {
+            .main-window {
+                transform: scale(0.5);
+            }
+        }
+
+        .info-banner {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(99, 102, 241, 0.9);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            font-size: 14px;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+    </style>
+</head>
+
+<body>
+    <div class="info-banner">
+        📺 Preview for 13.3" Display (1920x1080) - Optimized for Waveshare HDMI LCD
+    </div>
+
+    <div class="main-window">
+        <!-- Header -->
+        <div class="header">
+            <div style="width: 50px;"></div>
+            <div class="logo">🤖</div>
+            <div class="title">ROS2 - ROBOT CONTROL SYSTEM</div>
+            <div class="header-buttons">
+                <button class="header-btn">⚙️</button>
+                <button class="header-btn">⏻</button>
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Camera Area -->
+            <div class="camera-area">
+                <div class="camera-view">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">📹</div>
+                        <div>Camera 0 - Input Tray</div>
+                    </div>
+                </div>
+                <div class="camera-view">
+                    <div style="text-align: center;">
+                        <div style="font-size: 48px; margin-bottom: 10px;">📹</div>
+                        <div>Camera 1 - Output Tray</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <div class="panel-title">🤖 ROBOT CONTROL</div>
+                <div class="divider"></div>
+
+                <!-- System Status -->
+                <div class="status-grid">
+                    <span class="status-label">Status:</span>
+                    <span class="status-value" id="status">IDLE</span>
+
+                    <span class="status-label">Row:</span>
+                    <span class="status-value row" id="row">3</span>
+
+                    <span class="status-label">Slot:</span>
+                    <span class="status-value slot" id="slot">5</span>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- System Control -->
+                <div class="section-title">System Control</div>
+                <button class="btn btn-enable" onclick="log('Enable System')">▶️ Enable System</button>
+                <button class="btn btn-disable" onclick="log('Disable System')">⏸️ Disable System</button>
+                <button class="btn btn-danger" onclick="log('Emergency Stop')">🛑 Emergency Stop</button>
+
+                <div class="divider"></div>
+
+                <!-- Mode Control -->
+                <div class="section-title">Operation Mode</div>
+                <div class="btn-row">
+                    <button class="btn btn-mode" onclick="log('Manual Mode')">🎮 Manual</button>
+                    <button class="btn btn-mode ai" onclick="log('AI Mode')">🤖 AI</button>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Camera Control -->
+                <div class="section-title">Camera Control</div>
+                <div class="btn-row">
+                    <button class="btn btn-camera" onclick="log('Camera 0')">📹 Cam 0</button>
+                    <button class="btn btn-camera" onclick="log('Camera 1')">📹 Cam 1</button>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Row Selection -->
+                <div class="section-title">Select Input Row</div>
+                <div class="grid-5">
+                    <button class="btn-small btn-row-select" onclick="selectRow(1)">1</button>
+                    <button class="btn-small btn-row-select" onclick="selectRow(2)">2</button>
+                    <button class="btn-small btn-row-select" onclick="selectRow(3)">3</button>
+                    <button class="btn-small btn-row-select" onclick="selectRow(4)">4</button>
+                    <button class="btn-small btn-row-select" onclick="selectRow(5)">5</button>
+                </div>
+
+                <div class="divider"></div>
+
+                <!-- Slot Selection -->
+                <div class="section-title">Select Output Slot</div>
+                <div class="grid-4">
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(1)">1</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(2)">2</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(3)">3</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(4)">4</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(5)">5</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(6)">6</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(7)">7</button>
+                    <button class="btn-small btn-slot-select" onclick="selectSlot(8)">8</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Footer -->
+        <div class="footer">
+            <div class="footer-left">© 2025 RYNAN TECHNOLOGIES</div>
+            <div class="footer-right">
+                <div class="status-indicator">
+                    <div class="status-dot"></div>
+                    <span style="color: #00ff99;">Status: Running</span>
+                </div>
+                <span style="color: #6cf;" id="time"></span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function log(msg) {
+            console.log('🎯', msg);
+        }
+
+        function selectRow(row) {
+            document.getElementById('row').textContent = row;
+            log(`Row ${row} selected`);
+        }
+
+        function selectSlot(slot) {
+            document.getElementById('slot').textContent = slot;
+            log(`Slot ${slot} selected`);
+        }
+
+        // Update time
+        function updateTime() {
+            const now = new Date();
+            const timeStr = now.toLocaleString('sv-SE', {
+                year: 'numeric',
+                month: '2-digit',
+                day: '2-digit',
+                hour: '2-digit',
+                minute: '2-digit',
+                second: '2-digit'
+            }).replace(',', '');
+            document.getElementById('time').textContent = timeStr;
+        }
+        updateTime();
+        setInterval(updateTime, 1000);
+
+        // Auto-scale for different screen sizes
+        function scaleWindow() {
+            const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+            if (scale < 1) {
+                document.querySelector('.main-window').style.transform = `scale(${scale})`;
+            }
+        }
+        scaleWindow();
+        window.addEventListener('resize', scaleWindow);
+    </script>
+</body>
+
+</html>

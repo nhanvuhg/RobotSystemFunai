@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>rpi_cam_bridge</name>
+  <version>0.0.1</version>
+  <description>Bridge Raspberry Pi libcamera (rpicam-vid) to ROS 2 Image topics</description>
+  <maintainer email="pi@localhost">pi</maintainer>
+  <license>MIT</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
+  <depend>cv_bridge</depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>cv_bridge</exec_depend>
+</package>

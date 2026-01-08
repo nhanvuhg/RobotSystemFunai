@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>nova5_gui</name>
+  <version>0.1.0</version>
+  <description>Standalone QML GUI for Nova5: Enable, GetAngle, JointMovJ</description>
+
+  <maintainer email="you@example.com">you</maintainer>
+  <license>Apache-2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>yaml-cpp</depend>
+  <depend>dobot_msgs_v3</depend>
+
+  <!-- Qt is found via CMake find_package(Qt5 ...) -->
+  <exec_depend>qtbase5-dev</exec_depend>
+  <exec_depend>qtdeclarative5-dev</exec_depend>
+  <exec_depend>qtquickcontrols2-5-dev</exec_depend>
+  <exec_depend>qml-module-qtquick-controls2</exec_depend>
+</package>
