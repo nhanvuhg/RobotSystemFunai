@@ -81,7 +81,7 @@ PID_CAMERA=$!
 echo "csi_camera_node PID=$PID_CAMERA"
 
 echo "Starting YOLO detection launch (background). Log: $YOLO_LOG"
-ros2 launch yolo_ros_hailort_cpp system_csi_dual_model.launch.py > "$YOLO_LOG" 2>&1 &
+ros2 launch yolo_ros_hailort_cpp mutilcam_yolox_hailort.launch.py > "$YOLO_LOG" 2>&1 &
 PID_YOLO=$!
 echo "YOLO detection PID=$PID_YOLO"
 

@@ -21,12 +21,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'cam0_boxes_topic',
-            default_value='/cam0/yolo/bounding_boxes',
+            default_value='/cam0Funai/yolo/bounding_boxes',
             description='Camera 0 (Input Tray) YOLO detections'
         ),
         DeclareLaunchArgument(
             'cam1_boxes_topic',
-            default_value='/cam1/yolo/bounding_boxes',
+            default_value='/cam1Funai/yolo/bounding_boxes',
             description='Camera 1 (Output Tray) YOLO detections'
         ),
         DeclareLaunchArgument(
@@ -58,14 +58,14 @@ def generate_launch_description():
             # Camera 0 (Input Tray) parameters
             'cam0.image_topic': shared_image,
             'cam0.boxes_topic': cam0_boxes,
-            'cam0.output_topic': '/cam0/image_overlay',
+            'cam0.output_topic': '/cam0Funai/image_overlay',
             'cam0.output_width': out_width,
             'cam0.output_height': out_height,
             
             # Camera 1 (Output Tray) parameters
             'cam1.image_topic': shared_image,
             'cam1.boxes_topic': cam1_boxes,
-            'cam1.output_topic': '/cam1/image_overlay',
+            'cam1.output_topic': '/cam1Funai/image_overlay',
             'cam1.output_width': out_width,
             'cam1.output_height': out_height,
         }],

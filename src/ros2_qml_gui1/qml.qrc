@@ -11,7 +11,5 @@
         <file>qml/icons/settings.svg</file>
         <file>qml/icons/schedule.svg</file>
         <file>qml/icons/app_badging.svg</file>
-        <file>qml/icons/stop-mini-line.svg</file>
-        <file>qml/icons/pause-mini-line.svg</file>
     </qresource>
 </RCC>

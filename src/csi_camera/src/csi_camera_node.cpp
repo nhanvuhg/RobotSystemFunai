@@ -35,11 +35,11 @@ public:
                     target_width_, target_height_, target_fps_);
 
         // Initialize publishers
-        pub_cam0_ = this->create_publisher<sensor_msgs::msg::Image>("cam0HP/image_raw", 10);
-        pub_cam1_ = this->create_publisher<sensor_msgs::msg::Image>("cam1HP/image_raw", 10);
+        pub_cam0_ = this->create_publisher<sensor_msgs::msg::Image>("cam0Funai/image_raw", 10);
+        pub_cam1_ = this->create_publisher<sensor_msgs::msg::Image>("cam1Funai/image_raw", 10);
         pub_active_ = this->create_publisher<sensor_msgs::msg::Image>(output_topic_, 10);
         
-        RCLCPP_INFO(this->get_logger(), "Publishers: cam0HP/image_raw, cam1HP/image_raw, %s", 
+        RCLCPP_INFO(this->get_logger(), "Publishers: cam0Funai/image_raw, cam1Funai/image_raw, %s", 
                     output_topic_.c_str());
 
         sub_camera_select_ = this->create_subscription<std_msgs::msg::Int32>(
@@ -70,10 +70,8 @@ public:
                 std::bind(&CSICameraNode::capture_loop, this));
             
             RCLCPP_INFO(this->get_logger(), "========================================");
-            RCLCPP_INFO(this->get_logger(), "✅ Camera Node Ready!");
+            RCLCPP_INFO(this->get_logger(), "✅ Camera Node Ready (Streaming Mode)!");
             RCLCPP_INFO(this->get_logger(), "========================================");
-        } else {
-            RCLCPP_ERROR(this->get_logger(), "❌ Failed to initialize camera!");
         }
     }
 
@@ -109,10 +107,16 @@ private:
         RCLCPP_INFO(this->get_logger(), "  🔧 Switching to Camera %d", cam_id);
         
         std::string cmd;
+        int stabilization_ms;
+        
         if (cam_id == 0) {
-            cmd = "i2ctransfer -f -y 4 w3@0x0c 0xff 0x55 0x01";
+            RCLCPP_INFO(this->get_logger(), "  🔧 [MAPPING] Cam 0 -> Physical Port 2 (Input Tray)");
+            cmd = "i2ctransfer -f -y 4 w3@0x0c 0xff 0x55 0x02"; 
+            stabilization_ms = 500;  // Ch2 needs only 500ms
         } else if (cam_id == 1) {
-            cmd = "i2ctransfer -f -y 4 w3@0x0c 0xff 0x55 0x02";
+            RCLCPP_INFO(this->get_logger(), "  🔧 [MAPPING] Cam 1 -> Physical Port 1 (Output Tray)");
+            cmd = "i2ctransfer -f -y 4 w3@0x0c 0xff 0x55 0x01";
+            stabilization_ms = 5000;  // Ch1 needs 5 seconds!
         } else {
             RCLCPP_ERROR(this->get_logger(), "❌ Invalid camera: %d", cam_id);
             return false;
@@ -126,8 +130,8 @@ private:
             return false;
         }
         
-        // Shorter stabilization since rpicam-vid handles initialization better
-        rclcpp::sleep_for(std::chrono::milliseconds(500));
+        RCLCPP_INFO(this->get_logger(), "  ⏳ Stabilizing for %d ms...", stabilization_ms);
+        rclcpp::sleep_for(std::chrono::milliseconds(stabilization_ms));
         
         // Quick verification
         RCLCPP_INFO(this->get_logger(), "  🔍 Verifying camera...");
@@ -251,10 +255,6 @@ private:
             return;
         }
         
-        // Set pipe to non-blocking mode? NO. 
-        // We want synchronous reads for full frames once data is detected.
-        // O_NONBLOCK causes fread to return partial frames which we discard.
-        
         // Calculate YUV420 frame size
         yuv_frame_size_ = target_width_ * target_height_ * 3 / 2;
         yuv_buffer_.resize(yuv_frame_size_);
@@ -268,11 +268,13 @@ private:
     
     void stop_stream()
     {
+        // Force kill rpicam-vid to ensure clean state
+        std::system("pkill -9 rpicam-vid 2>/dev/null");
+        
         if (rpicam_pipe_) {
             pclose(rpicam_pipe_);
             rpicam_pipe_ = nullptr;
         }
-        std::system("pkill -9 rpicam-vid 2>/dev/null");
     }
 
     void capture_loop()
@@ -289,22 +291,29 @@ private:
 
         struct timeval timeout;
         timeout.tv_sec = 0;
-        timeout.tv_usec = 5000; // 5ms timeout
+        timeout.tv_usec = 50000; // 50ms timeout
 
         int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
         
-        if (ready <= 0) {
-            return; // No data or error
+        if (ready < 0) {
+            RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 5000, "select() error");
+            return;
         }
-
-        // Read frame data
-        size_t bytes_read = fread(yuv_buffer_.data(), 1, yuv_frame_size_, rpicam_pipe_);
-        
-        if (bytes_read != yuv_frame_size_) {
-            // Incomplete frame - this is normal at boundaries
+        if (ready == 0) {
+            // Timeout - no data yet
             return;
         }
 
+        // Read YUV420 frame data
+        size_t bytes_read = fread(yuv_buffer_.data(), 1, yuv_frame_size_, rpicam_pipe_);
+        
+        if (bytes_read != yuv_frame_size_) {
+            // Incomplete frame - this is normal at boundaries or stalls
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000, 
+                "Incomplete frame: %zu/%zu bytes", bytes_read, yuv_frame_size_);
+            return;
+        }
+        
         // Zero-copy conversion: reuse pre-allocated matrices
         yuv_mat_.data = yuv_buffer_.data();
         cv::cvtColor(yuv_mat_, bgr_frame_, cv::COLOR_YUV2BGR_I420);
@@ -315,19 +324,21 @@ private:
         header.frame_id = (current_cam_id_ == 0) ? 
             "camera_input_tray" : "camera_output_tray";
 
-        // Publish to camera-specific topic
         auto msg = cv_bridge::CvImage(header, "bgr8", bgr_frame_).toImageMsg();
         
+        // Publish to camera-specific topic
         if (current_cam_id_ == 0 && pub_cam0_) {
             pub_cam0_->publish(*msg);
         } else if (current_cam_id_ == 1 && pub_cam1_) {
             pub_cam1_->publish(*msg);
         }
         
-        // Also publish to unified visualization topic
         if (pub_active_) {
             pub_active_->publish(*msg);
         }
+        
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 10000, 
+            "✓ Frame published (%dx%d)", bgr_frame_.cols, bgr_frame_.rows);
     }
 
     void publish_active_id()
@@ -374,96 +385,3 @@ int main(int argc, char **argv)
     rclcpp::shutdown();
     return 0;
 }
-
-/*
-================================================================================
-🎯 OPTIMIZATIONS APPLIED
-================================================================================
-
-1. **Non-blocking I/O**
-   - Set pipe to O_NONBLOCK mode
-   - Prevents blocking if rpicam-vid stalls
-   - select() with 5ms timeout for responsive checking
-
-2. **Zero-copy Conversion**
-   - Pre-allocate cv::Mat yuv_mat_ and bgr_frame_
-   - Reuse same matrices instead of creating new ones each frame
-   - yuv_mat_.data points directly to buffer (no copy)
-   - Reduces memory allocations and GC pressure
-
-3. **Optimized Timer Frequency**
-   - Run 10% faster than frame rate (900/fps instead of 1000/fps)
-   - Ensures we check for frames frequently enough
-   - Prevents missing frames when timing is tight
-
-4. **Better Error Recovery**
-   - If switch fails, try to restore previous camera
-   - Prevents node from being stuck in non-functional state
-
-5. **Improved Logging**
-   - Emoji indicators for quick visual scanning
-   - More consistent formatting
-   - Less verbose in normal operation
-
-6. **rpicam-vid --flush Flag**
-   - Forces immediate buffer flushing
-   - Reduces latency in the pipeline
-   - Better for real-time applications
-
-================================================================================
-📊 PERFORMANCE COMPARISON
-================================================================================
-
-BEFORE (your original):
-- Timer: 33ms (1000/30 fps)
-- Memory: ~4.5 MB/s allocation (creating new Mat every frame)
-- Latency: ~50-100ms (buffering in rpicam-vid)
-
-AFTER (optimized):
-- Timer: 30ms (900/30 fps) → 10% more frequent checks
-- Memory: ~0.5 MB/s allocation (reuse matrices)
-- Latency: ~30-50ms (--flush flag reduces buffering)
-- CPU: ~5-10% lower (less allocation overhead)
-
-================================================================================
-🧪 TESTING
-================================================================================
-
-# Monitor frame rate
-ros2 topic hz /cam0/image_raw
-ros2 topic hz /cam1/image_raw
-
-# Should see consistent ~30 Hz
-
-# Test switching
-ros2 topic pub -1 /robot/camera_select std_msgs/Int32 "{data: 0}"
-sleep 2
-ros2 topic pub -1 /robot/camera_select std_msgs/Int32 "{data: 1}"
-sleep 2
-ros2 topic pub -1 /robot/camera_select std_msgs/Int32 "{data: 0}"
-
-# Check CPU usage
-top -p $(pgrep csi_camera_node)
-
-# Should see CPU around 15-25% (down from 25-35% before)
-
-================================================================================
-📝 NOTES
-================================================================================
-
-Your rpicam-vid approach is actually BETTER than GStreamer for Raspberry Pi:
-
-✅ Pros:
-- No libcamera timeout issues
-- Native Raspberry Pi tool (well-optimized)
-- Simple subprocess management
-- Reliable camera switching
-
-❌ Cons (minor):
-- Requires YUV → BGR conversion (but fast with OpenCV)
-- One extra process (rpicam-vid subprocess)
-
-Keep this approach! It's more reliable than fighting with libcamera directly.
-
-================================================================================
-*/

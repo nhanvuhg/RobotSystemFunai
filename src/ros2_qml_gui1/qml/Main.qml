@@ -33,7 +33,7 @@ ApplicationWindow {
         Item {
             id: itemTitleRow
             width: parent.width
-            height: 80
+            height: 110
 
             property string currentTime: Qt.formatDateTime(new Date(), "yyyy-MM-dd hh:mm:ss")
 
@@ -58,7 +58,17 @@ ApplicationWindow {
                         Layout.preferredWidth: 60
                     }
                     
-
+                    Item{
+                        Layout.preferredWidth: 60
+                        Layout.leftMargin: 10
+                        Image{
+                            source: "qrc:/icons/qml/icons/rynan_logo.png"
+                            anchors.centerIn: parent
+                            height: 60
+                            fillMode: Image.PreserveAspectFit
+                            smooth: true
+                        }
+                    }
                     
                     Item {
                         Layout.fillWidth: true
@@ -66,16 +76,16 @@ ApplicationWindow {
                         Text {
                             id: titleText
                             anchors.centerIn: parent
-                            text: "ROS2 - ROBOT CONTROL SYSTEM"
-                            font.pixelSize: 24
+                            text: "ROS2 - CAMERA VIEWER"
+                            font.pixelSize: 28
                             font.bold: true
                             color: "#6cf"
                         }
                     }
 
                     Button {
-                        Layout.preferredWidth: 50
-                        Layout.preferredHeight: 50
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 60
 
                         onClicked: {
                             var comp = Qt.createComponent("frm_settings.qml");
@@ -110,8 +120,8 @@ ApplicationWindow {
                     }
                     
                     Button {
-                        Layout.preferredWidth: 50
-                        Layout.preferredHeight: 50
+                        Layout.preferredWidth: 60
+                        Layout.preferredHeight: 60
                         onClicked: Qt.quit()
 
                         background: Rectangle {
@@ -139,13 +149,12 @@ ApplicationWindow {
             Layout.fillWidth: true
             Layout.fillHeight: true
             spacing: 10
-            
-            // Middle Left: Camera Area (Flexible height, but prioritized)
+
             Rectangle{
                 color: "#081e29"
                 Layout.fillHeight: true
-                Layout.fillWidth: true
-                Layout.preferredWidth: 3.5
+                Layout.fillWidth: true        // chiếm hết phần còn lại
+                Layout.preferredWidth: 2.75      // tỉ lệ 3 phần
                 border.color: "#134357"
                 radius: 6
 
@@ -153,11 +162,12 @@ ApplicationWindow {
                 GridLayout {
                     id: camGrid
                     columns: 2
-                    rowSpacing: 10
-                    columnSpacing: 10
+                    rowSpacing: 20
+                    columnSpacing: 15
                     anchors.fill: parent
-                    anchors.margins: 10
-                    
+                    anchors.margins: 15
+                    anchors.topMargin:20
+                    anchors.bottomMargin:20 
                     Repeater {
                         model: camNode.cameraList
 
@@ -165,323 +175,95 @@ ApplicationWindow {
                             cameraName: modelData.name
                             topic: modelData.topic
                             providerId: modelData.providerId
-                            
-                            // Let GridLayout handle sizing, but hint aspect ratio could be enforced inside CameraView
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
                         }
                     }
                 }
             }
 
-            // Middle Right: Status Panel (Vertical)
+            // Info Panel (Right docked)
             Rectangle {
-                Layout.fillHeight: true
-                Layout.preferredWidth: 350
-                Layout.minimumWidth: 300
+                width: parent.width * 0.2
+                height: parent.height
                 color: "#081e29"
                 border.color: "#134357"
                 radius: 6
-
-                ColumnLayout {
-                    anchors.fill: parent
+           
+                Layout.fillHeight: true
+                Layout.preferredWidth: 1.25     // tỉ lệ 1 phần (3:1 so với camera)
+                Layout.minimumWidth: 350
+                Layout.maximumWidth: 420
+                
+                GridLayout {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.right: parent.right
                     anchors.margins: 10
-                    spacing: 15
+                    columns: 1
 
                     Text {
-                        text: "SYSTEM MONITOR"
+                        text: "PRODUCTION INFORMATION"
                         color: "#5cf4f1"
                         font.bold: true
-                        font.pixelSize: 16
+                        font.pixelSize: 20
+                        padding: 10
                         Layout.alignment: Qt.AlignHCenter
                     }
-                    
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#134357" }
 
-                    // Status Grid
-                    GridLayout {
-                        Layout.fillWidth: true
-                        columns: 2
-                        rowSpacing: 10
-                        columnSpacing: 10
-                        
-                        Text { text: "Status:"; color: "#94a3b8"; font.pixelSize: 13 }
-                        Text { text: robotController.systemStatus; color: "#10b981"; font.bold: true; font.pixelSize: 13 }
-                        
-                        Text { text: "Mode:"; color: "#94a3b8"; font.pixelSize: 13 }
-                        Text { 
-                            text: "MANUAL" // Placeholder, should bind to actual mode if available
-                            color: "#6366f1"; font.bold: true; font.pixelSize: 13 
-                        }
-
-                        Text { text: "Row:"; color: "#94a3b8"; font.pixelSize: 13 }
-                        Text { text: robotController.selectedRow > 0 ? robotController.selectedRow : "-"; color: "#5cf4f1"; font.bold: true; font.pixelSize: 13 }
-
-                        Text { text: "Slot:"; color: "#94a3b8"; font.pixelSize: 13 }
-                        Text { text: robotController.selectedSlot > 0 ? robotController.selectedSlot : "-"; color: "#5cf4f1"; font.bold: true; font.pixelSize: 13 }
-                    }
-
-                    Rectangle { Layout.fillWidth: true; height: 1; color: "#134357" }
-                    
-                    // Error Display
                     Rectangle {
+                        //Layout.topMargin: 10
+                        height: 1
                         Layout.fillWidth: true
-                        height: errorText.visible ? 60 : 0
-                        color: "#ef444420"
-                        border.color: "#ef4444"
-                        radius: 6
-                        visible: robotController.errorMessage !== ""
-                        
+                        color: "#134357"
+                    }
+
+                    GridLayout{
+                        //anchors.top: parent.top
+                        Layout.topMargin: 20
+                        columns: 2
+                        rowSpacing: 20
+                        columnSpacing: 10
                         Text {
-                            id: errorText
-                            anchors.fill: parent
-                            anchors.margins: 5
-                            text: robotController.errorMessage
-                            color: "#ef4444"
-                            font.pixelSize: 12
-                            wrapMode: Text.WordWrap
+                            text: "Product Name: "
+                            color: "#5cf4f1"
+                            font.pixelSize: 16
                         }
-                    }
-                       // Main System Controls
-                    Text { text: "System Control"; color: "#5cf4f1"; font.bold: true; font.pixelSize: 14 }
-                    Button {
-                        Layout.fillWidth: true; Layout.preferredHeight: 50
-                        text: "▶️ Enable System"
-                        onClicked: robotController.enableSystem(true)
-                        background: Rectangle { radius: 6; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                        contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    }
-                    Button {
-                        Layout.fillWidth: true; Layout.preferredHeight: 50
-                        text: "II Pause System"
-                        onClicked: robotController.enableSystem(false)
-                        background: Rectangle { radius: 6; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                        contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    }
-                    Button {
-                        Layout.fillWidth: true; Layout.preferredHeight: 55
-                        text: "STOP EMERGENCY"
-                        onClicked: robotController.emergencyStop(true)
-                        background: Rectangle { radius: 6; color: parent.pressed ? "#dc2626" : "#ef4444"; border.color: "#ef4444"; border.width: 2 }
-                        contentItem: Text { text: parent.text; color: "white"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    }
-                    // Mode Controls
-                    Text { text: "Operation Mode"; color: "#5cf4f1"; font.bold: true; font.pixelSize: 14 }
-                        Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 50; text: "  Auto"
-                            onClicked: { 
-                                robotController.setManualMode(false); 
-                                robotController.setAiMode(false); 
-                            }
-                            background: Rectangle { radius: 8; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                            contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        Text {
+                            text: "FUNAI CARTRIDGE"
+                            color: "#5cf4f1"
+                            font.pixelSize: 16
                         }
-                    Button {
-                        Layout.fillWidth: true; Layout.preferredHeight: 50; text: "  AI"
-                        onClicked: { 
-                            robotController.setManualMode(false); 
-                            robotController.setAiMode(true); 
+                        Text {
+                            text: "Production Quantity:"
+                            color: "#5cf4f1"
+                            font.pixelSize: 16
                         }
-                        background: Rectangle { radius: 8; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                        contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    }
-                    Button {
-                        Layout.fillWidth: true; Layout.preferredHeight: 50; text: "  Manual"
-                        onClicked: { 
-                            robotController.setManualMode(true); 
-                            robotController.setAiMode(false); 
-                        }
-                        background: Rectangle { radius: 8; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                        contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                    }
-
-                    // Camera Controls
-                    Text { text: "Camera Control"; color: "#5cf4f1"; font.bold: true; font.pixelSize: 14 }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 50; text: " Cam 0"
-                            onClicked: robotController.switchCamera(0)
-                            background: Rectangle { radius: 6; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                            contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                        }
-                        Button {
-                            Layout.fillWidth: true; Layout.preferredHeight: 50; text: " Cam 1"
-                            onClicked: robotController.switchCamera(1)
-                            background: Rectangle { radius: 6; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 2 }
-                            contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
+                        Text {
+                            text: "270"
+                            color: "#5cf4f1"
+                            font.pixelSize: 16
                         }
                     }
 
-                    Item { Layout.fillHeight: true } // Spacer
-                }
-            }
-        }
+                    // Item {
+                    //     Layout.fillWidth: true
+                    //     Layout.fillHeight: true
 
-        // Bottom Bar: Control Sequence (Horizontal)
-        Rectangle {
-            Layout.fillWidth: true
-            Layout.preferredHeight: 160
-            color: "#081e29"
-            border.color: "#134357"
-            radius: 6
-            
-            RowLayout {
-                anchors.fill: parent
-                anchors.margins: 10
-                spacing: 20
-
-                // 1. Select Input Row
-                Rectangle {
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: parent.width * 0.2
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 180
-                    color: "transparent"
-                    border.color: "#134357"
-                    radius: 4
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 5
-                        Text { text: "1. Select Row"; color: "#5cf4f1"; font.bold: true; Layout.alignment: Qt.AlignHCenter }
-                        
-                        GridLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            columns: 3
-                            Repeater {
-                                model: 5
-                                Button {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
-                                    text: (index + 1).toString()
-                                    onClicked: robotController.selectRow(index + 1)
-                                    background: Rectangle {
-                                        radius: 4
-                                        color: parent.pressed || robotController.selectedRow === (index + 1) ? "#5cf4f1" : "transparent"
-                                        border.color: "#5cf4f1"
-                                        border.width: 1
-                                    }
-                                    contentItem: Text {
-                                        text: parent.text
-                                        color: parent.pressed || robotController.selectedRow === (index + 1) ? "#0d1117" : "#5cf4f1"
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 2. Select Output Slot
-                Rectangle {
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: parent.width * 0.3
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 250
-                    color: "transparent"
-                    border.color: "#134357"
-                    radius: 4
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 5
-                        Text { text: "2. Select Slot"; color: "#5cf4f1"; font.bold: true; Layout.alignment: Qt.AlignHCenter }
-                        
-                        GridLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            columns: 4
-                            Repeater {
-                                model: 8
-                                Button {
-                                    Layout.fillWidth: true; Layout.fillHeight: true
-                                    text: (index + 1).toString()
-                                    onClicked: robotController.selectSlot(index + 1)
-                                    background: Rectangle {
-                                        radius: 4
-                                        color: parent.pressed || robotController.selectedSlot === (index + 1) ? "#5cf4f1" : "transparent"
-                                        border.color: "#5cf4f1"
-                                        border.width: 1
-                                    }
-                                    contentItem: Text {
-                                        text: parent.text
-                                        color: parent.pressed || robotController.selectedSlot === (index + 1) ? "#0d1117" : "#5cf4f1"
-                                        font.bold: true
-                                        horizontalAlignment: Text.AlignHCenter
-                                        verticalAlignment: Text.AlignVCenter
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 3. Robot Actions
-                Rectangle {
-                    Layout.fillHeight: true
-                    Layout.preferredWidth: parent.width * 0.45
-                    Layout.fillWidth: true
-                    color: "transparent"
-                    border.color: "#134357"
-                    radius: 4
-                    
-                    ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 5
-                        Text { text: "3. Execute Action"; color: "#5cf4f1"; font.bold: true; Layout.alignment: Qt.AlignHCenter }
-                        
-                        GridLayout {
-                            Layout.fillWidth: true
-                            Layout.fillHeight: true
-                            columns: 3 // Set to 3 columns for 3x2 layout
-                            
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Pick Direct"
-                                onClicked: robotController.gotoState("INIT_LOAD_CHAMBER_DIRECT")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Refill Buffer"
-                                onClicked: robotController.gotoState("REFILL_BUFFER")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Put To Chamber"
-                                onClicked: robotController.gotoState("LOAD_CHAMBER_FROM_BUFFER")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Place To Scale"
-                                onClicked: robotController.gotoState("TAKE_CHAMBER_TO_SCALE")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Place To Output"
-                                onClicked: robotController.gotoState("PLACE_TO_OUTPUT")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                            Button {
-                                Layout.fillWidth: true; Layout.fillHeight: true; text: "Place To Fail"
-                                onClicked: robotController.gotoState("PLACE_TO_FAIL")
-                                background: Rectangle { radius: 4; color: parent.pressed ? "#5cf4f1" : "transparent"; border.color: "#5cf4f1"; border.width: 1 }
-                                contentItem: Text { text: parent.text; color: parent.pressed ? "#0d1117" : "#5cf4f1"; font.bold: true; horizontalAlignment: Text.AlignHCenter; verticalAlignment: Text.AlignVCenter }
-                            }
-                        }
-                    }
+                    //     ChartView {
+                    //         anchors.fill: parent
+                    //         antialiasing: false
+                    //         title: "Test Chart"
+                    //         PieSeries {
+                    //             PieSlice { label: "One"; value: 10 }
+                    //             PieSlice { label: "Two"; value: 90 }
+                    //         }
+                    //     }
+                    // }
                 }
             }
         }
 
         Item {
-            height: 40
+            height: 45
             Layout.fillWidth: true
 
             Rectangle {

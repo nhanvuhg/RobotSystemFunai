@@ -10,8 +10,6 @@ set(CMAKE_INCLUDE_CURRENT_DIR ON)
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(std_msgs REQUIRED)
-find_package(std_srvs REQUIRED)
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(image_transport REQUIRED)
@@ -26,14 +24,12 @@ include_directories(
 set(HEADER_FILES
   include/ros2_qml_gui/cam_node.hpp
   include/ros2_qml_gui/cam_provider.hpp
-  include/ros2_qml_gui/robot_controller.hpp
 )
 
 set(SOURCES
   src/main.cpp
   src/cam_node.cpp
   src/cam_provider.cpp
-  src/robot_controller.cpp
 )
 
 qt5_add_resources(QML_RESOURCES qml.qrc)
@@ -58,8 +54,6 @@ target_link_libraries(${PROJECT_NAME}
 ament_target_dependencies(${PROJECT_NAME}
   rclcpp
   sensor_msgs
-  std_msgs
-  std_srvs
   cv_bridge
   image_transport
 )

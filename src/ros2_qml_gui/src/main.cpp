@@ -15,13 +15,12 @@ int main(int argc, char *argv[])
 
     auto camNode = std::make_shared<CamNode>(engine);
 
-    // ============================
-
-    // ============================
     std::vector<std::string> topics = {
         "/camera/image_raw_blue",
-        "/camera/image_raw_yellow"
-    };   
+        "/camera/image_raw_yellow",
+        "/camera/image_raw_green",
+        "/camera/image_raw_red",
+        "/camera/image_raw_gray"};
 
     camNode->setup(topics);
     engine.rootContext()->setContextProperty("camNode", camNode.get());
@@ -30,9 +29,8 @@ int main(int argc, char *argv[])
     if (engine.rootObjects().isEmpty())
         return -1;
 
-    std::thread rosThread([=]() { 
-        rclcpp::spin(camNode); 
-    });
+    std::thread rosThread([=]()
+                          { rclcpp::spin(camNode); });
     rosThread.detach();
 
     return app.exec();

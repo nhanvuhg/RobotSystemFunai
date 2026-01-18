@@ -1,6 +1,16 @@
-# Multi-camera YOLO + HailoRT (2 cams)
-# - cam0: /dev/video0  → topics /cam0/...
-# - cam1: /dev/video1  → topics /cam1/...
+# Copyright 2023 Ar-Ray-code
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import launch
 from launch.actions import DeclareLaunchArgument
@@ -9,93 +19,93 @@ from launch_ros.actions import ComposableNodeContainer
 from launch_ros.descriptions import ComposableNode
 
 def generate_launch_description():
-    # Common args (dùng chung cho 2 camera)
     launch_args = [
-        DeclareLaunchArgument('model_path',
-            default_value='./src/hailort_yolo_common/weights/yolox_tiny.hef',
-            description='HEF model path'),
-        DeclareLaunchArgument('class_labels_path',
+        DeclareLaunchArgument(
+            'model_path_cam0',
+            default_value='/home/pi/input_1_yolov8s.hef',
+            description='HEF model path for Cam0 (Input Tray).'
+        ),
+        DeclareLaunchArgument(
+            'model_path_cam1',
+            default_value='/home/pi/yolov8s.hef',
+            description='HEF model path for Cam1 (Output Tray).'
+        ),
+        DeclareLaunchArgument(
+            'class_labels_path',
             default_value='',
-            description='path to labels.txt (optional)'),
-        DeclareLaunchArgument('conf',
-            default_value='0.20',
-            description='YOLO confidence threshold'),
-        DeclareLaunchArgument('nms',
-            default_value='0.35',
-            description='YOLO NMS IoU threshold'),
-        DeclareLaunchArgument('imshow_isshow',
-            default_value='false',
-            description='do not pop up GUI windows when multi-cam'),
-        DeclareLaunchArgument('publish_resized_image',
-            default_value='false',
-            description='publish resized image instead of original'),
-        DeclareLaunchArgument('nms_output_name',
+            description='if use custom model, set class name labels. '
+        ),
+        DeclareLaunchArgument(
+            'conf',
+            default_value='0.30',
+            description='yolo confidence threshold.'
+        ),
+        DeclareLaunchArgument(
+            'nms',
+            default_value='0.45',
+            description='yolo nms threshold'
+        ),
+        DeclareLaunchArgument(
+            'imshow_isshow',
+            default_value='false',  # Default false for headless robot
+            description=''
+        ),
+        DeclareLaunchArgument(
+            'nms_output_name',
             default_value='yolov8s/yolov8_nms_postprocess',
-            description='Exact NMS output tensor name inside the HEF'),
+            description='Exact NMS output tensor name inside the HEF.'
+        ),
     ]
-
-    # Riêng cho từng camera
-    cam0_args = {
-        'video_device': '/dev/video0',
-        'namespace':    'cam0',
-        'camera_frame': 'cam0_frame'
-    }
-    cam1_args = {
-        'video_device': '/dev/video4',
-        'namespace':    'cam1',
-        'camera_frame': 'cam1_frame'
-    }
-
-    def make_cam_nodes(ns: str, dev: str, frame_id: str):
-        # usb_cam
-        usb = ComposableNode(
-            package='usb_cam',
-            plugin='usb_cam::UsbCamNode',
-            name=f'usb_cam_{ns}',
-            namespace=f'/{ns}',
-            parameters=[{
-                'video_device': dev,
-                'image_width': 640,
-                'image_height': 480,
-                'framerate': 30.0,
-                'pixel_format': 'yuyv',   # đổi 'yuyv' nếu cam không hỗ trợ mjpeg
-                'camera_frame_id': frame_id,
-                'brightness': 100
-            }],
-            remappings=[('image', 'image_raw')]
-        )
-
-        # yolo
-        yolo = ComposableNode(
-            package='yolo_ros_hailort_cpp',
-            plugin='yolo_ros_hailort_cpp::YoloNode',
-            name=f'yolo_{ns}',
-            namespace=f'/{ns}',
-            parameters=[{
-                'model_path': LaunchConfiguration('model_path'),
-                'class_labels_path': LaunchConfiguration('class_labels_path'),
-                'conf': LaunchConfiguration('conf'),
-                'nms': LaunchConfiguration('nms'),
-                'imshow_isshow': LaunchConfiguration('imshow_isshow'),
-                'publish_resized_image': LaunchConfiguration('publish_resized_image'),
-                'nms_output_name': LaunchConfiguration('nms_output_name'),
-                # topic names cho mỗi namespace
-                'src_image_topic_name': f'/{ns}/image_raw',
-                'publish_image_topic_name': f'/{ns}/yolo/image_raw',
-                'publish_boundingbox_topic_name': f'/{ns}/yolo/bounding_boxes',
-            }]
-        )
-        return [usb, yolo]
 
     container = ComposableNodeContainer(
         name='yolo_container',
         namespace='',
         package='rclcpp_components',
         executable='component_container',
-        composable_node_descriptions=
-            make_cam_nodes(cam0_args['namespace'], cam0_args['video_device'], cam0_args['camera_frame'])
-            + make_cam_nodes(cam1_args['namespace'], cam1_args['video_device'], cam1_args['camera_frame']),
-        output='screen'
+        composable_node_descriptions=[
+            # CAM 0 NODE (Input Tray)
+            ComposableNode(
+                package='yolo_ros_hailort_cpp',
+                plugin='yolo_ros_hailort_cpp::YoloNode',
+                name='yolo_cam0',
+                parameters=[{
+                    'model_path': LaunchConfiguration('model_path_cam0'),
+                    'class_labels_path': LaunchConfiguration('class_labels_path'),
+                    'conf': LaunchConfiguration('conf'),
+                    'nms': LaunchConfiguration('nms'),
+                    'imshow_isshow': LaunchConfiguration('imshow_isshow'),
+                    'src_image_topic_name': 'cam0Funai/image_raw',
+                    'publish_image_topic_name': 'cam0Funai/yolo/image_raw',
+                    'publish_boundingbox_topic_name': '/cam0Funai/yolo/bounding_boxes',
+                    'publish_resized_image': False,
+                    'nms_output_name': LaunchConfiguration('nms_output_name'),
+                }]
+            ),
+            # CAM 1 NODE (Output Tray)
+            ComposableNode(
+                package='yolo_ros_hailort_cpp',
+                plugin='yolo_ros_hailort_cpp::YoloNode',
+                name='yolo_cam1',
+                parameters=[{
+                    'model_path': LaunchConfiguration('model_path_cam1'),
+                    'class_labels_path': LaunchConfiguration('class_labels_path'),
+                    'conf': LaunchConfiguration('conf'),
+                    'nms': LaunchConfiguration('nms'),
+                    'imshow_isshow': LaunchConfiguration('imshow_isshow'),
+                    'src_image_topic_name': 'cam1Funai/image_raw',
+                    'publish_image_topic_name': 'cam1Funai/yolo/image_raw',
+                    'publish_boundingbox_topic_name': '/cam1Funai/yolo/bounding_boxes',
+                    'publish_resized_image': False,
+                    'nms_output_name': LaunchConfiguration('nms_output_name'),
+                }]
+            ),
+        ],
+        output='screen',
     )
 
-    return launch.LaunchDescription(launch_args + [container])
+    return launch.LaunchDescription(
+        launch_args +
+        [
+            container
+        ]
+    )

@@ -24,11 +24,22 @@ pkill -9 -f "csi_camera_node" 2>/dev/null
 pkill -9 -f "yolo_ros_hailort_cpp" 2>/dev/null
 pkill -9 -f "system_csi_dual_model" 2>/dev/null
 
+# Kill other nodes
+echo "  Stopping other nodes (bbox, snap7, GUI)..."
+pkill -9 -f "bbox_drawer_cpp" 2>/dev/null
+pkill -9 -f "snap7_node" 2>/dev/null
+pkill -9 -f "ros2_qml_gui1" 2>/dev/null
+pkill -9 -f "overlay_two_cams.launch.py" 2>/dev/null
+
+# Kill bash watchdogs
+echo "  Stopping bash watchdogs..."
+pkill -f "bash -c.*Source ROS2 environment" 2>/dev/null || true
+
 # Wait for processes to terminate
 sleep 1
 
 # Verify all stopped
-REMAINING=$(ps aux | grep -E "(robot_logic_node|dobot_bringup|gripper_festo|csi_camera|yolo)" | grep -v grep | wc -l)
+REMAINING=$(ps aux | grep -E "(robot_logic_node|dobot_bringup|gripper_festo|csi_camera|yolo|bbox_drawer|snap7|ros2_qml_gui1)" | grep -v grep | wc -l)
 
 echo ""
 if [ $REMAINING -eq 0 ]; then

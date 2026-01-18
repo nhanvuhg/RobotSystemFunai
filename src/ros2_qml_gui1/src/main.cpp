@@ -2,7 +2,6 @@
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include "ros2_qml_gui/cam_node.hpp"
-#include "ros2_qml_gui/robot_controller.hpp"
 #include <thread>
 
 int main(int argc, char *argv[])
@@ -26,10 +25,6 @@ int main(int argc, char *argv[])
 
     camNode->setup(topics);
     engine.rootContext()->setContextProperty("camNode", camNode.get());
-
-    // Initialize Robot Controller
-    auto robotController = new RobotController(camNode);
-    engine.rootContext()->setContextProperty("robotController", robotController);
 
     engine.load(QUrl(QStringLiteral("qrc:/qml/Main.qml")));
     if (engine.rootObjects().isEmpty())

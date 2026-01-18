@@ -8,12 +8,8 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/highgui.hpp>
 #include <cstring>
-#include <memory>
-#include <string>
 
 using vision_msgs::msg::Detection2DArray;
-
-// -pi- CÁC HÀM TIỆN ÍCH (HELPER FUNCTIONS) - GIỮ NGUYÊN ---
 
 static inline void draw_detections(cv::Mat &img, const Detection2DArray &dets, double sx, double sy)
 {
@@ -31,10 +27,7 @@ static inline void draw_detections(cv::Mat &img, const Detection2DArray &dets, d
         y1 = std::max(0, std::min(y1, img.rows-1));
         x2 = std::max(0, std::min(x2, img.cols-1));
         y2 = std::max(0, std::min(y2, img.rows-1));
-        
-        // Vẽ khung chữ nhật (Màu xanh lá)
         cv::rectangle(img, cv::Rect(cv::Point(x1,y1), cv::Point(x2,y2)), cv::Scalar(0,255,0), 2);
-        
         std::string label = "";
         if (!det.results.empty()) {
             const auto &h = det.results[0].hypothesis;
@@ -60,13 +53,21 @@ static inline bool rosimg_to_cvmat(const sensor_msgs::msg::Image &msg, cv::Mat &
         cv::Mat ref_rgb(msg.height, msg.width, CV_8UC3, const_cast<unsigned char*>(msg.data.data()), msg.step);
         cv::cvtColor(ref_rgb, out_bgr, cv::COLOR_RGB2BGR);
         return true;
-    } else if (enc == "yuv422_yuy2" || enc == "yuyv") {
+    } else if (enc == "mono8") {
+        cv::Mat ref_gray(msg.height, msg.width, CV_8UC1, const_cast<unsigned char*>(msg.data.data()), msg.step);
+        cv::cvtColor(ref_gray, out_bgr, cv::COLOR_GRAY2BGR);
+        return true;
+    } else if (enc == "yuv422_yuy2" || enc == "yuyv" || enc == "yuv422") {
         cv::Mat ref_yuyv(msg.height, msg.width, CV_8UC2, const_cast<unsigned char*>(msg.data.data()), msg.step);
         cv::cvtColor(ref_yuyv, out_bgr, cv::COLOR_YUV2BGR_YUY2);
         return true;
-    } 
-    // Thêm các định dạng khác nếu cần
-    return false;
+    } else if (enc == "uyvy" || enc == "yuv422_uyvy") {
+        cv::Mat ref_uyvy(msg.height, msg.width, CV_8UC2, const_cast<unsigned char*>(msg.data.data()), msg.step);
+        cv::cvtColor(ref_uyvy, out_bgr, cv::COLOR_YUV2BGR_UYVY);
+        return true;
+    } else {
+        return false;
+    }
 }
 
 static inline sensor_msgs::msg::Image cvmat_to_rosimg(const cv::Mat &bgr, const std_msgs::msg::Header &header)
@@ -76,43 +77,37 @@ static inline sensor_msgs::msg::Image cvmat_to_rosimg(const cv::Mat &bgr, const 
     out.height = bgr.rows;
     out.width  = bgr.cols;
     out.encoding = "bgr8";
+    out.is_bigendian = false;
     out.step = static_cast<sensor_msgs::msg::Image::_step_type>(bgr.cols * bgr.channels());
-    out.data.resize(out.step * out.height);
-    std::memcpy(out.data.data(), bgr.data, out.data.size());
+    size_t size = static_cast<size_t>(out.step) * out.height;
+    out.data.resize(size);
+    std::memcpy(out.data.data(), bgr.data, size);
     return out;
 }
 
-// --- CLASS QUẢN LÝ 1 KÊNH (HELPER CLASS, KHÔNG PHẢI NODE) ---
-class ChannelVisualizer {
+class OverlayForOneCam : public rclcpp::Node {
 public:
     using ImageMsg = sensor_msgs::msg::Image;
     using BoxesMsg = Detection2DArray;
-    using SyncPolicy = message_filters::sync_policies::ApproximateTime<ImageMsg, BoxesMsg>;
 
-    ChannelVisualizer(rclcpp::Node* node, const std::string& prefix) 
-        : node_(node), prefix_(prefix)
+    OverlayForOneCam(const std::string &ns, const rclcpp::NodeOptions &opts = rclcpp::NodeOptions())
+    : Node("overlay_"+ns, opts), ns_(ns)
     {
-        // Khai báo tham số dạng "cam0.image_topic", "cam0.boxes_topic"
-        // Điều này khớp hoàn toàn với file launch của bạn
-        std::string img_topic = node_->declare_parameter<std::string>(prefix_ + ".image_topic", "/" + prefix_ + "/image_raw");
-        std::string box_topic = node_->declare_parameter<std::string>(prefix_ + ".boxes_topic", "/" + prefix_ + "/yolo/bounding_boxes");
-        std::string out_topic = node_->declare_parameter<std::string>(prefix_ + ".output_topic", "/" + prefix_ + "/image_overlay");
-        
-        out_w_ = node_->declare_parameter<int>(prefix_ + ".output_width", 640);
-        out_h_ = node_->declare_parameter<int>(prefix_ + ".output_height", 480);
+        image_topic_ = declare_parameter<std::string>("image_topic", "/"+ns_+"/image_raw");
+        boxes_topic_ = declare_parameter<std::string>("boxes_topic", "/"+ns_+"/yolo/bounding_boxes");
+        output_topic_= declare_parameter<std::string>("output_topic", "/"+ns_+"/image_overlay");
+        out_w_       = declare_parameter<int>("output_width",  640);
+        out_h_       = declare_parameter<int>("output_height", 640);
 
-        // Khởi tạo Subscribers & Publisher
-        image_sub_ = std::make_shared<message_filters::Subscriber<ImageMsg>>(node_, img_topic);
-        boxes_sub_ = std::make_shared<message_filters::Subscriber<BoxesMsg>>(node_, box_topic);
-        
-        // Synchronizer: Đồng bộ ảnh và box
-        sync_ = std::make_shared<message_filters::Synchronizer<SyncPolicy>>(SyncPolicy(10), *image_sub_, *boxes_sub_);
-        sync_->registerCallback(std::bind(&ChannelVisualizer::callback, this, std::placeholders::_1, std::placeholders::_2));
+        image_sub_.reset(new message_filters::Subscriber<ImageMsg>(this, image_topic_));
+        boxes_sub_.reset(new message_filters::Subscriber<BoxesMsg>(this, boxes_topic_));
 
-        pub_ = image_transport::create_publisher(node_, out_topic);
+        using Policy = message_filters::sync_policies::ApproximateTime<ImageMsg, BoxesMsg>;
+        sync_.reset(new message_filters::Synchronizer<Policy>(Policy(10), *image_sub_, *boxes_sub_));
+        sync_->registerCallback(std::bind(&OverlayForOneCam::callback, this, std::placeholders::_1, std::placeholders::_2));
 
-        RCLCPP_INFO(node_->get_logger(), "Configured Overlay [%s]: Img='%s', Box='%s' -> Out='%s'", 
-            prefix_.c_str(), img_topic.c_str(), box_topic.c_str(), out_topic.c_str());
+        pub_ = image_transport::create_publisher(this, output_topic_);
+        RCLCPP_INFO(get_logger(), "[%s] Sub: %s, %s | Pub: %s", ns_.c_str(), image_topic_.c_str(), boxes_topic_.c_str(), output_topic_.c_str());
     }
 
 private:
@@ -120,65 +115,56 @@ private:
     {
         cv::Mat bgr;
         if (!rosimg_to_cvmat(*img_msg, bgr)) {
-            // Chỉ warn 1 lần mỗi giây để đỡ spam log
-            RCLCPP_WARN_THROTTLE(node_->get_logger(), *node_->get_clock(), 1000, 
-                "[%s] Unsupported encoding: %s", prefix_.c_str(), img_msg->encoding.c_str());
+            RCLCPP_WARN(get_logger(), "[%s] Unsupported encoding: %s", ns_.c_str(), img_msg->encoding.c_str());
             return;
         }
-
-        // Resize nếu cần
         cv::Mat resized;
-        if (bgr.cols != out_w_ || bgr.rows != out_h_) {
-            cv::resize(bgr, resized, cv::Size(out_w_, out_h_));
-        } else {
-            resized = bgr; // No copy
-        }
-
-        // Tính tỉ lệ để vẽ box cho đúng vị trí sau khi resize
-        double sx = static_cast<double>(out_w_) / img_msg->width;
-        double sy = static_cast<double>(out_h_) / img_msg->height;
-
-        // Vẽ
+        cv::resize(bgr, resized, cv::Size(out_w_, out_h_));
+        double sx = static_cast<double>(out_w_) / bgr.cols;
+        double sy = static_cast<double>(out_h_) / bgr.rows;
         draw_detections(resized, *boxes_msg, sx, sy);
-
-        // Publish
         auto out_msg = cvmat_to_rosimg(resized, img_msg->header);
         pub_.publish(out_msg);
     }
 
-    rclcpp::Node* node_;
-    std::string prefix_;
-    int out_w_, out_h_;
-    
+    std::string ns_, image_topic_, boxes_topic_, output_topic_;
+    int out_w_{960}, out_h_{540};
     std::shared_ptr<message_filters::Subscriber<ImageMsg>> image_sub_;
     std::shared_ptr<message_filters::Subscriber<BoxesMsg>> boxes_sub_;
-    std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+    std::shared_ptr<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<ImageMsg, BoxesMsg>>> sync_;
     image_transport::Publisher pub_;
 };
 
-// --- NODE CHÍNH (QUẢN LÝ CẢ 2 KÊNH) ---
-class DualCamOverlayNode : public rclcpp::Node {
+class OverlayTwoCams : public rclcpp::Node {
 public:
-    DualCamOverlayNode(const rclcpp::NodeOptions &opts = rclcpp::NodeOptions())
-    : Node("overlay_dual_cam", opts)
+    OverlayTwoCams(const rclcpp::NodeOptions &opts = rclcpp::NodeOptions())
+    : Node("overlay_two_cams", opts)
     {
-        // Tạo 2 visualizer cho 2 prefix "cam0" và "cam1"
-        // Nó sẽ tự động đọc tham số cam0.image_topic, cam1.image_topic...
-        vis_cam0_ = std::make_shared<ChannelVisualizer>(this, "cam0");
-        vis_cam1_ = std::make_shared<ChannelVisualizer>(this, "cam1");
-        
-        RCLCPP_INFO(get_logger(), "Dual Camera Overlay Node Started.");
+        rclcpp::NodeOptions child_opts;
+        cam0_ = std::make_shared<OverlayForOneCam>("cam0Funai", child_opts);
+        cam1_ = std::make_shared<OverlayForOneCam>("cam1Funai", child_opts);
+        cam2_ = std::make_shared<OverlayForOneCam>("cam2Funai", child_opts);
+        exec_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
+        exec_->add_node(cam0_);
+        exec_->add_node(cam1_);
+        exec_->add_node(cam2_);
+        worker_ = std::thread([this](){ exec_->spin(); });
+        RCLCPP_INFO(get_logger(), "OverlayTwoCams started.");
     }
-
+    ~OverlayTwoCams() override {
+        if (exec_) exec_->cancel();
+        if (worker_.joinable()) worker_.join();
+    }
 private:
-    std::shared_ptr<ChannelVisualizer> vis_cam0_;
-    std::shared_ptr<ChannelVisualizer> vis_cam1_;
+    rclcpp::executors::MultiThreadedExecutor::SharedPtr exec_;
+    std::shared_ptr<OverlayForOneCam> cam0_, cam1_, cam2_;
+    std::thread worker_;
 };
 
 int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<DualCamOverlayNode>());
+    rclcpp::spin(std::make_shared<OverlayTwoCams>());
     rclcpp::shutdown();
     return 0;
 }

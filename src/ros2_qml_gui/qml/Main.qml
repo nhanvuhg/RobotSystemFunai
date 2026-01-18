@@ -13,6 +13,7 @@ ApplicationWindow {
     title: "ROS2 - CAMERA VIEWER"
     color: "#0d1117"
     visibility: Window.FullScreen
+
     property string currentTime: Qt.formatDateTime(new Date(), "yyyy-MM-dd hh:mm")
 
     Shortcut {
@@ -152,17 +153,20 @@ ApplicationWindow {
 
             Rectangle{
                 color: "#081e29"
-                Layout.fillHeight: true
-                Layout.fillWidth: true        // chiếm hết phần còn lại
-                Layout.preferredWidth: 2.75      // tỉ lệ 3 phần
+                width: (parent.width * 0.6) - 30
+                height: parent.height
                 border.color: "#134357"
                 radius: 6
 
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin:10
 
                 GridLayout {
                     id: camGrid
-                    columns: 2
-                    rowSpacing: 20
+                    columns: 3
+                    rowSpacing: 30
                     columnSpacing: 15
                     anchors.fill: parent
                     anchors.margins: 15
@@ -187,11 +191,10 @@ ApplicationWindow {
                 color: "#081e29"
                 border.color: "#134357"
                 radius: 6
-           
-                Layout.fillHeight: true
-                Layout.preferredWidth: 1.25     // tỉ lệ 1 phần (3:1 so với camera)
-                Layout.minimumWidth: 350
-                Layout.maximumWidth: 420
+                anchors.right: parent.right
+                anchors.rightMargin: 10
+                anchors.bottom: parent.bottom
+                anchors.bottomMargin: 10
                 
                 GridLayout {
                     anchors.top: parent.top
