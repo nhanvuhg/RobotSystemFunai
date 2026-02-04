@@ -14,11 +14,21 @@ find_package(std_msgs REQUIRED)        # ✅ ADDED - Required for Int32
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
 
-# Create executable
+# Create executables
+# Original switch-based camera node (BACKUP)
 add_executable(csi_camera_node src/csi_camera_node.cpp)
+
+# NEW: Dual parallel camera node
+add_executable(csi_dual_camera_node src/csi_dual_camera_node.cpp)
 
 # Include directories
 target_include_directories(csi_camera_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_include_directories(csi_dual_camera_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${OpenCV_INCLUDE_DIRS}
@@ -32,12 +42,25 @@ ament_target_dependencies(csi_camera_node
   cv_bridge
 )
 
+ament_target_dependencies(csi_dual_camera_node
+  rclcpp
+  sensor_msgs
+  std_msgs
+  cv_bridge
+)
+
 target_link_libraries(csi_camera_node 
   ${OpenCV_LIBS}
 )
 
-# Install
-install(TARGETS csi_camera_node
+target_link_libraries(csi_dual_camera_node
+  ${OpenCV_LIBS}
+)
+
+# Install both nodes
+install(TARGETS 
+  csi_camera_node           # Original switch-based (backup)
+  csi_dual_camera_node      # New dual parallel mode
   DESTINATION lib/${PROJECT_NAME}
 )
 

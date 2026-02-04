@@ -618,11 +618,11 @@ void RobotLogicNode::initServiceClients()
 void RobotLogicNode::initSubscriptions()
 {
     camera1_sub_ = create_subscription<Detection2DArray>(
-        "cam0HP/yolo/bounding_boxes", 10,
+        "/cam0Funai/yolo/bounding_boxes", 10,
         std::bind(&RobotLogicNode::camera1Callback, this, std::placeholders::_1));
         
     camera2_sub_ = create_subscription<Detection2DArray>(
-        "cam1HP/yolo/bounding_boxes", 10,
+        "/cam1Funai/yolo/bounding_boxes", 10,
         std::bind(&RobotLogicNode::camera2Callback, this, std::placeholders::_1));
     
     // Camera active ID confirmation from CSI node

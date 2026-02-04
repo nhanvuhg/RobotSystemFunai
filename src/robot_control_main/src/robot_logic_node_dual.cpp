@@ -1,3 +1,7 @@
+// ================================================================
+// DUAL CAMERA MODE - Processes both cameras simultaneously
+// Original file: robot_logic_node.cpp (switch-based backup)
+// ================================================================
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "dobot_msgs_v3/srv/enable_robot.hpp"
@@ -131,7 +135,7 @@ enum class SlotStableState : int
 class RobotLogicNode : public rclcpp::Node
 {
 public:
-    RobotLogicNode() : Node("robot_logic_nova5"), detected_(false), has_button_(false), current_active_camera_(-1)
+    RobotLogicNode() : Node("robot_logic_nova5_dual"), detected_(false), has_button_(false), current_active_camera_(-1)
     {
         std::vector<std::string> motion_sequence;
         this->declare_parameter("motion_sequence", std::vector<std::string>{});
@@ -266,20 +270,16 @@ public:
 
         // CSI Camera subscriptions - updated for Funai naming convention
         yolov8_sub_cam1_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
-            "/cam0Funai/yolo/bounding_boxes", 10,
+            "/cam0/detections", 10,
             std::bind(&RobotLogicNode::yolov8CallbackCam5, this, std::placeholders::_1));
 
         yolov8_sub_cam5_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
-            "/cam1Funai/yolo/bounding_boxes", 10,
+            "/cam1/detections", 10,
             std::bind(&RobotLogicNode::detCallback, this, std::placeholders::_1));
 
         // CSI Camera control - subscribe to active camera ID confirmation
-        camera_active_id_sub_ = this->create_subscription<std_msgs::msg::Int32>(
-            "/camera/active_id", 10,
-            std::bind(&RobotLogicNode::cameraActiveIdCallback, this, std::placeholders::_1));
         
         // CSI Camera control - publisher to request camera switch
-        camera_select_pub_ = this->create_publisher<std_msgs::msg::Int32>("/robot/camera_select", 10);
 
         // yolov8_sub_camrealsense_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
         //     "/camrealsense/detections_output", 10,
@@ -675,6 +675,7 @@ private:
         
         // // USER REQUEST: Switch AND Wait for Camera 1 here
         // RCLCPP_INFO(this->get_logger(), "[STEP 5] 📸 Switching to Camera 1 (Synchronous)...");
+        // // DUAL MODE: No camera switching needed
         // if (!switchAndWaitForCameraWithRetry(1, 3))
         // {
         //     RCLCPP_WARN(this->get_logger(), "[STEP 5] ⚠️ Camera switch warning, but proceeding...");
@@ -693,6 +694,7 @@ private:
         
         // Confirm Camera 1 is active (Switch was triggered in Step 5)
         // This acts as a barrier to ensure camera is ready for Step 7
+        // // DUAL MODE: No camera switching needed
         // if (!switchAndWaitForCameraWithRetry(1, 3))
         // {
         //     RCLCPP_ERROR(this->get_logger(), "[STEP 6] ❌ Waiting for Camera 1 timed out. Retrying...");
@@ -709,7 +711,8 @@ private:
         
         // 1. Ensure Camera 1 is active (Output Tray)
         // Must switch and confirm success before proceeding
-        if (!switchAndWaitForCameraWithRetry(1, 3))
+        // DUAL MODE: No camera switching needed
+        // if (!switchAndWaitForCameraWithRetry(1, 3))
         {
             RCLCPP_WARN(this->get_logger(), "[STEP 7] ⏳ Camera 1 switch failed or not ready. Retrying...");
             return; // Stay in Step 7 and retry
@@ -733,7 +736,7 @@ private:
             
             // Switch back to Camera 0 for next cycle
             RCLCPP_INFO(this->get_logger(), "[STEP 7] Requesting switch back to Camera 0...");
-            requestCameraSwitch(0);
+            // requestCameraSwitch(0);
             
             current_step_ = Step::step_0_IDLE_state;
         } 
@@ -790,7 +793,7 @@ private:
         
         // Optimally switch back to Camera 0 (Input Tray) for next cycle
         RCLCPP_INFO(this->get_logger(), "[STEP 8] Requesting switch back to Camera 0 for next input cycle...");
-        requestCameraSwitch(0);
+        // requestCameraSwitch(0);
         
         current_step_ = Step::step_0_IDLE_state;
         rclcpp::sleep_for(100ms);
@@ -874,7 +877,7 @@ private:
         
     // Force switch to Camera 0 (Input) on enable
         RCLCPP_INFO(this->get_logger(), "🚀 Enabling robot - Switching to Camera 0 (Input)");
-        requestCameraSwitch(0);
+        // requestCameraSwitch(0);
         
         callEnable();
         // current_step_ = 0;
@@ -893,8 +896,13 @@ private:
         RCLCPP_INFO(this->get_logger(), "[CAMERA] ✅ Active camera confirmed: %d", msg->data);
     }
 
-    void requestCameraSwitch(int camera_id)
+   void requestCameraSwitch(int camera_id)
     {
+        // DUAL MODE: Camera switching disabled
+        RCLCPP_INFO(this->get_logger(), "[DUAL MODE] Camera switching not needed - both cameras always active");
+        return;
+        
+        /* ORIGINAL SWITCH LOGIC (disabled in dual mode)
         if (camera_id < 0 || camera_id > 1)
         {
             RCLCPP_ERROR(this->get_logger(), "[CAMERA] ❌ Invalid camera ID: %d", camera_id);
@@ -915,6 +923,7 @@ private:
         camera_select_pub_->publish(*msg);
 
         RCLCPP_INFO(this->get_logger(), "[CAMERA] 📷 Requesting Camera %d switch...", camera_id);
+        */
     }
 
     bool waitForCameraActive(int target_camera, double timeout_sec = 20.0)
@@ -952,7 +961,7 @@ private:
 
     bool switchAndWaitForCamera(int camera_id)
     {
-        requestCameraSwitch(camera_id);
+        // requestCameraSwitch(camera_id);
 
         if (!waitForCameraActive(camera_id, 20.0))
         {
