@@ -22,6 +22,7 @@ public:
         RCLCPP_INFO(this->get_logger(), "========================================");
         
         // Parameters
+        // ROLLBACK: 1280x720@30fps (2028x1520@40fps was too slow ~8fps)
         this->declare_parameter("width", 1280);
         this->declare_parameter("height", 720);
         this->declare_parameter("fps", 30);
