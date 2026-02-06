@@ -1496,8 +1496,9 @@ private:
             int cid = -1;
             try { cid = std::stoi(d.results[0].hypothesis.class_id); } catch (...) { continue; }
 
-            // Allow 1, 2, 3 and also 0 if it's high enough score (might be misclassified cartridge)
-            if (cid != 1 && cid != 2 && cid != 3 && cid != 0)
+            // Only allow cartridge classes: 1=cartridge_ok, 2=misoriented, 3=cartridge_fall
+            // Skip class 0 (tray) - nó không phải cartridge!
+            if (cid != 1 && cid != 2 && cid != 3)
                 continue;
 
             double score = d.results[0].hypothesis.score;
@@ -1576,21 +1577,20 @@ private:
                 
                 double iou = IoU(ws.aabb, dr.box);
                 
+                // DEBUG: Log all candidates for Slot 4 (index 3)
+                if (s == 3 && debug_logs_) {
+                    RCLCPP_INFO(this->get_logger(),
+                        "DEBUG Slot4: Det %d iou=%.3f inside=%d box=(%.1f,%.1f,%.1f,%.1f)",
+                        d, iou, inside ? 1 : 0, dr.box.x1, dr.box.y1, dr.box.x2, dr.box.y2);
+                }
                 
-                // Stricter threshold: reject low IoU detections
-                // Even if inside, reject if IoU is too low (likely tray background noise)
-                if (iou < 0.3) 
+                // Logic từ backup: skip nếu KHÔNG inside VÀ IoU thấp
+                // Nếu inside thì luôn accept (cartridge fall có center trong slot)
+                if (!inside && iou < iou_thresh_)
                     continue;
 
-                // Score logic: inside gets huge bonus (1.0). 
-                // BUT if IoU is decent (> 0.3), also give significant bonus (0.8) 
-                // to prioritize it over noise.
-                double score = iou;
-                if (inside) 
-                    score += 1.0;
-                else if (iou > 0.3)
-                    score += 0.8;
-
+                // Score logic: inside bonus + IoU
+                double score = (inside ? 1.0 + iou : iou);
                 bool orient_ok = (dr.orient == ws.orient);
                 if (orient_ok)
                     score += 0.1;
@@ -1672,10 +1672,22 @@ private:
             }
         }
 
-        // (8) publish theo trạng thái ổn định
+        // (8) publish theo trạng thái ổn định + instant override cho empty
+        // ✅ CRITICAL FIX: Ưu tiên instant state để tránh va chạm với cartridge fall
+        // Nếu slot có object NGAY BÂY GIỜ (instant = OCC_OK), loại khỏi empty NGAY
         std::vector<int> empty_slots, mis_slots;
         for (int s = 0; s < (int)slots.size(); ++s)
         {
+            // ⚠️ INSTANT OVERRIDE: Nếu vừa detect object -> KHÔNG empty (kể cả stable chưa update)
+            if (instant[s] != SlotStableState::EMPTY)
+            {
+                // Slot có object (bao gồm cartridge fall) -> skip
+                if (stable_state_[s] == SlotStableState::MIS)
+                    mis_slots.push_back(s + 1);
+                continue;
+            }
+            
+            // Chỉ slot INSTANT empty VÀ STABLE empty mới được publish
             if (stable_state_[s] == SlotStableState::EMPTY)
                 empty_slots.push_back(s + 1);
             else if (stable_state_[s] == SlotStableState::MIS)
