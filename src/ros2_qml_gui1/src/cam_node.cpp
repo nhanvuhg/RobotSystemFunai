@@ -37,16 +37,19 @@ void CamNode::setup(const std::vector<std::string> &topics)
         QString providerId = QString("cam_%1").arg(i);
         CamProvider *provider = providers_[i];
 
+        // Use BEST_EFFORT QoS to match image_transport publisher
+        auto qos = rclcpp::QoS(10).best_effort();
         auto sub = this->create_subscription<sensor_msgs::msg::Image>(
-            limitedTopics[i], 10,
+            limitedTopics[i], qos,
             [this, i](const std::shared_ptr<const sensor_msgs::msg::Image> &msg)
             {
                 try
                 {
                     auto cvimg = cv_bridge::toCvCopy(msg, "bgr8")->image;
-                    // auto cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::BGR8);
-                    // cv::Mat cvimg = cv_ptr->image;
-                    QImage qimg(cvimg.data, cvimg.cols, cvimg.rows, cvimg.step, QImage::Format_BGR888);
+                    // Resize to 640x360 (16:9) to match camera aspect ratio
+                    cv::Mat resized;
+                    cv::resize(cvimg, resized, cv::Size(640, 360));
+                    QImage qimg(resized.data, resized.cols, resized.rows, resized.step, QImage::Format_BGR888);
                     providers_[i]->setImage(qimg.copy());
                 }
                 catch (const std::exception &e)
@@ -70,52 +73,82 @@ void CamNode::setup(const std::vector<std::string> &topics)
 QStringList CamNode::getAvailableImageTopics()
 {
     QStringList result;
+    // Topics to exclude from settings dropdown
+    QStringList excludePatterns = {"cam2", "/ai/", "image_raw"};
+
     auto topics_and_types = this->get_topic_names_and_types();
     for (const auto &pair : topics_and_types)
     {
         const auto &topic_name = pair.first;
         const auto &types = pair.second;
+        QString qTopic = QString::fromStdString(topic_name);
+
+        // Skip excluded topics
+        bool excluded = false;
+        for (const auto &pattern : excludePatterns)
+            if (qTopic.contains(pattern)) { excluded = true; break; }
+        if (excluded) continue;
+
         for (const auto &type : types)
         {
             if (type == "sensor_msgs/msg/Image")
             {
-                result << QString::fromStdString(topic_name);
+                result << qTopic;
             }
         }
     }
+    result.sort();
     return result;
 }
 
 void CamNode::updateCameraTopic(int index, const QString &newTopic)
 {
-    if (index < 0 || index >= static_cast<int>(subs_.size()))
+    RCLCPP_INFO(this->get_logger(), "[GUI] Updating camera %d to topic: %s", index, newTopic.toStdString().c_str());
+    
+    if (index < 0 || index >= static_cast<int>(subs_.size())) {
+        RCLCPP_ERROR(this->get_logger(), "[GUI] Invalid camera index: %d", index);
         return;
+    }
 
-    subs_[index].reset();
+    try {
+        // Reset old subscription
+        subs_[index].reset();
 
-    auto sub = this->create_subscription<sensor_msgs::msg::Image>(
-        newTopic.toStdString(), 10,
-        [this, index](const std::shared_ptr<const sensor_msgs::msg::Image> &msg)
-        {
-            try
+        // Create new subscription
+        // Use BEST_EFFORT QoS to match image_transport publisher
+        auto qos = rclcpp::QoS(10).best_effort();
+        auto sub = this->create_subscription<sensor_msgs::msg::Image>(
+            newTopic.toStdString(), qos,
+            [this, index](const std::shared_ptr<const sensor_msgs::msg::Image> &msg)
             {
-                auto cvimg = cv_bridge::toCvCopy(msg, "bgr8")->image;
-                QImage qimg(cvimg.data, cvimg.cols, cvimg.rows, cvimg.step, QImage::Format_BGR888);
-                providers_[index]->setImage(qimg.copy());
-            }
-            catch (const std::exception &e)
-            {
-                RCLCPP_ERROR(this->get_logger(), "Image error: %s", e.what());
-            }
-        });
+                try
+                {
+                    auto cvimg = cv_bridge::toCvCopy(msg, "bgr8")->image;
+                    // Resize to 640x360 (16:9) to match overlay aspect ratio
+                    cv::Mat resized;
+                    cv::resize(cvimg, resized, cv::Size(640, 360));
+                    QImage qimg(resized.data, resized.cols, resized.rows, resized.step, QImage::Format_BGR888);
+                    providers_[index]->setImage(qimg.copy());
+                }
+                catch (const std::exception &e)
+                {
+                    RCLCPP_ERROR(this->get_logger(), "Image error: %s", e.what());
+                }
+            });
 
-    subs_[index] = sub;
+        subs_[index] = sub;
 
-    QVariantMap cam = cameraList_[index].toMap();
-    cam["topic"] = newTopic;
-    cameraList_[index] = cam;
+        QVariantMap cam = cameraList_[index].toMap();
+        cam["topic"] = newTopic;
+        cameraList_[index] = cam;
 
-    emit cameraListChanged();
+        emit cameraListChanged();
+        
+        RCLCPP_INFO(this->get_logger(), "[GUI] Successfully updated camera %d subscription", index);
+    }
+    catch (const std::exception &e) {
+        RCLCPP_ERROR(this->get_logger(), "[GUI] Failed to update topic: %s", e.what());
+    }
 }
 
 void CamNode::refreshTopics()

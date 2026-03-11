@@ -27,17 +27,18 @@ static inline void draw_detections(cv::Mat &img, const Detection2DArray &dets, d
         y1 = std::max(0, std::min(y1, img.rows-1));
         x2 = std::max(0, std::min(x2, img.cols-1));
         y2 = std::max(0, std::min(y2, img.rows-1));
-        cv::rectangle(img, cv::Rect(cv::Point(x1,y1), cv::Point(x2,y2)), cv::Scalar(0,255,0), 2);
+        
+        cv::rectangle(img, cv::Rect(cv::Point(x1,y1), cv::Point(x2,y2)), cv::Scalar(0,255,0), 1);
         std::string label = "";
         if (!det.results.empty()) {
             const auto &h = det.results[0].hypothesis;
             label = h.class_id + " " + cv::format("(%.2f)", h.score);
         }
         if (!label.empty()) {
-            int base = 0; cv::Size ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &base);
-            int tx = std::max(0, x1), ty = std::max(ts.height+4, y1);
-            cv::rectangle(img, cv::Rect(tx, ty-ts.height-4, ts.width+6, ts.height+6), cv::Scalar(0,255,0), cv::FILLED);
-            cv::putText(img, label, cv::Point(tx+3, ty-3), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0,0,0), 1);
+            int base = 0; cv::Size ts = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.25, 1, &base);
+            int tx = std::max(0, x1), ty = std::max(ts.height+1, y1);
+            cv::rectangle(img, cv::Rect(tx, ty-ts.height-1, ts.width+2, ts.height+2), cv::Scalar(0,255,0), cv::FILLED);
+            cv::putText(img, label, cv::Point(tx+1, ty-1), cv::FONT_HERSHEY_SIMPLEX, 0.25, cv::Scalar(0,0,0), 1);
         }
     }
 }
@@ -97,7 +98,7 @@ public:
         boxes_topic_ = declare_parameter<std::string>("boxes_topic", "/"+ns_+"/yolo/bounding_boxes");
         output_topic_= declare_parameter<std::string>("output_topic", "/"+ns_+"/image_overlay");
         out_w_       = declare_parameter<int>("output_width",  640);
-        out_h_       = declare_parameter<int>("output_height", 640);
+        out_h_       = declare_parameter<int>("output_height", 360);
 
         image_sub_.reset(new message_filters::Subscriber<ImageMsg>(this, image_topic_));
         boxes_sub_.reset(new message_filters::Subscriber<BoxesMsg>(this, boxes_topic_));
@@ -143,11 +144,9 @@ public:
         rclcpp::NodeOptions child_opts;
         cam0_ = std::make_shared<OverlayForOneCam>("cam0Funai", child_opts);
         cam1_ = std::make_shared<OverlayForOneCam>("cam1Funai", child_opts);
-        cam2_ = std::make_shared<OverlayForOneCam>("cam2Funai", child_opts);
         exec_ = std::make_shared<rclcpp::executors::MultiThreadedExecutor>();
         exec_->add_node(cam0_);
         exec_->add_node(cam1_);
-        exec_->add_node(cam2_);
         worker_ = std::thread([this](){ exec_->spin(); });
         RCLCPP_INFO(get_logger(), "OverlayTwoCams started.");
     }
@@ -157,7 +156,7 @@ public:
     }
 private:
     rclcpp::executors::MultiThreadedExecutor::SharedPtr exec_;
-    std::shared_ptr<OverlayForOneCam> cam0_, cam1_, cam2_;
+    std::shared_ptr<OverlayForOneCam> cam0_, cam1_;
     std::thread worker_;
 };
 
