@@ -13,6 +13,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(std_msgs REQUIRED)        # ✅ ADDED - Required for Int32
 find_package(cv_bridge REQUIRED)
 find_package(OpenCV REQUIRED)
+find_package(spdlog REQUIRED)
+find_package(fmt REQUIRED)
 
 # Create executables
 # Original switch-based camera node (BACKUP)
@@ -55,6 +57,8 @@ target_link_libraries(csi_camera_node
 
 target_link_libraries(csi_dual_camera_node
   ${OpenCV_LIBS}
+  spdlog::spdlog
+  fmt::fmt
 )
 
 # Install both nodes

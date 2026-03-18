@@ -7,246 +7,359 @@
 #include <mutex>
 #include <atomic>
 #include <sys/select.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <cstring>
 
 using std::placeholders::_1;
+
+struct CamProcess {
+    pid_t pid = -1;
+    int   fd  = -1;
+};
+
+static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
+{
+    int pipefd[2];
+    if (pipe(pipefd) != 0) { perror("pipe"); return {}; }
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        perror("fork");
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return {};
+    }
+
+    if (pid == 0) {
+        close(pipefd[0]);
+        dup2(pipefd[1], STDOUT_FILENO);
+        close(pipefd[1]);
+
+        int devnull = open("/dev/null", O_WRONLY);
+        if (devnull >= 0) { dup2(devnull, STDERR_FILENO); close(devnull); }
+
+        std::string w = std::to_string(width);
+        std::string h = std::to_string(height);
+        std::string f = std::to_string(fps);
+        std::string c = std::to_string(cam_id);
+
+        execlp("rpicam-vid", "rpicam-vid",
+               "--camera",    c.c_str(),
+               "-t",          "0",
+               "--nopreview",
+               "--codec",     "yuv420",
+               "--width",     w.c_str(),
+               "--height",    h.c_str(),
+               "--framerate", f.c_str(),
+               "--denoise",   "cdn_off",   // FIX: giảm ISP load
+               "--flush",
+               "-o",          "-",
+               nullptr);
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+
+    int flags = fcntl(pipefd[0], F_GETFL, 0);
+    fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
+
+    // FIX: Tăng pipe buffer lên 1MB — giảm mất frame khi burst
+    fcntl(pipefd[0], F_SETPIPE_SZ, 1 * 1024 * 1024);
+
+    CamProcess cp;
+    cp.pid = pid;
+    cp.fd  = pipefd[0];
+    return cp;
+}
+
+static void kill_cam_process(CamProcess& cp)
+{
+    if (cp.pid > 0) {
+        kill(cp.pid, SIGKILL);
+        waitpid(cp.pid, nullptr, 0);
+        cp.pid = -1;
+    }
+    if (cp.fd >= 0) {
+        close(cp.fd);
+        cp.fd = -1;
+    }
+}
 
 class CSIDualCameraNode : public rclcpp::Node
 {
 public:
     CSIDualCameraNode() : Node("csi_dual_camera_node"), running_(true)
     {
-        RCLCPP_INFO(this->get_logger(), "========================================");
-        RCLCPP_INFO(this->get_logger(), "CSI Dual Camera Node (Parallel Mode)");
-        RCLCPP_INFO(this->get_logger(), "========================================");
-        
-        // Parameters
-        // ROLLBACK: 1280x720@30fps (2028x1520@40fps was too slow ~8fps)
-        this->declare_parameter("width", 1280);
-        this->declare_parameter("height", 720);
-        this->declare_parameter("fps", 30);
-        this->declare_parameter("cam0_topic", std::string("cam0Funai/image_raw"));
-        this->declare_parameter("cam1_topic", std::string("cam1Funai/image_raw"));
-        
-        target_width_ = this->get_parameter("width").as_int();
-        target_height_ = this->get_parameter("height").as_int();
-        target_fps_ = this->get_parameter("fps").as_int();
-        cam0_topic_ = this->get_parameter("cam0_topic").as_string();
-        cam1_topic_ = this->get_parameter("cam1_topic").as_string();
+        RCLCPP_INFO(get_logger(), "========================================");
+        RCLCPP_INFO(get_logger(), "CSI Dual Camera Node");
+        RCLCPP_INFO(get_logger(), "========================================");
 
-        RCLCPP_INFO(this->get_logger(), "Config: %dx%d @ %d fps", 
-                    target_width_, target_height_, target_fps_);
+        declare_parameter("width",      1280);
+        declare_parameter("height",      720);
+        declare_parameter("fps",          20);  // FIX: 30→20 giảm tải
+        declare_parameter("cam0_topic", std::string("cam0Funai/image_raw"));
+        declare_parameter("cam1_topic", std::string("cam1Funai/image_raw"));
 
-        // Initialize publishers
-        pub_cam0_ = this->create_publisher<sensor_msgs::msg::Image>(cam0_topic_, 10);
-        pub_cam1_ = this->create_publisher<sensor_msgs::msg::Image>(cam1_topic_, 10);
-        
-        RCLCPP_INFO(this->get_logger(), "Publishers: %s, %s", 
-                    cam0_topic_.c_str(), cam1_topic_.c_str());
+        target_width_  = get_parameter("width").as_int();
+        target_height_ = get_parameter("height").as_int();
+        target_fps_    = get_parameter("fps").as_int();
+        cam0_topic_    = get_parameter("cam0_topic").as_string();
+        cam1_topic_    = get_parameter("cam1_topic").as_string();
 
-        // Cleanup any old camera processes
+        pub_cam0_ = create_publisher<sensor_msgs::msg::Image>(cam0_topic_, 10);
+        pub_cam1_ = create_publisher<sensor_msgs::msg::Image>(cam1_topic_, 10);
+
+        yuv_frame_size_ = (size_t)target_width_ * target_height_ * 3 / 2;
+
         full_system_cleanup();
-        
-        RCLCPP_INFO(this->get_logger(), "🚀 Initializing CAM0 and CAM1...");
-        
-        // Start both camera streams
-        if (!start_camera(0, rpicam_pipe_cam0_)) {
-            RCLCPP_ERROR(this->get_logger(), "❌ Failed to start CAM0!");
-            return;
+
+        // Start CAM0
+        RCLCPP_INFO(get_logger(), "🚀 Starting CAM0...");
+        cam0_ = launch_rpicam(0, target_width_, target_height_, target_fps_);
+        if (cam0_.pid < 0) {
+            RCLCPP_ERROR(get_logger(), "❌ Failed to start CAM0!"); return;
         }
-        
-        if (!start_camera(1, rpicam_pipe_cam1_)) {
-            RCLCPP_ERROR(this->get_logger(), "❌ Failed to start CAM1!");
-            stop_camera(rpicam_pipe_cam0_);
-            return;
+
+        // Đợi CAM0 stream ổn định (frame thực sự, không phải delay cứng)
+        if (!wait_for_first_frame(cam0_.fd, "CAM0", 15)) {
+            kill_cam_process(cam0_); return;
         }
-        
-        // Calculate YUV420 frame size
-        yuv_frame_size_ = target_width_ * target_height_ * 3 / 2;
-        
-        // Start capture threads
-        thread_cam0_ = std::thread(&CSIDualCameraNode::capture_loop_cam0, this);
-        thread_cam1_ = std::thread(&CSIDualCameraNode::capture_loop_cam1, this);
-        
-        RCLCPP_INFO(this->get_logger(), "========================================");
-        RCLCPP_INFO(this->get_logger(), "✅ Dual Camera Node Ready!");
-        RCLCPP_INFO(this->get_logger(), "========================================");
+
+        // Start CAM1 chỉ sau khi CAM0 đã stream
+        RCLCPP_INFO(get_logger(), "🚀 Starting CAM1...");
+        cam1_ = launch_rpicam(1, target_width_, target_height_, target_fps_);
+        if (cam1_.pid < 0) {
+            RCLCPP_ERROR(get_logger(), "❌ Failed to start CAM1!");
+            kill_cam_process(cam0_); return;
+        }
+
+        wait_for_first_frame(cam1_.fd, "CAM1", 15);  // non-fatal nếu fail
+
+        thread_cam0_ = std::thread(&CSIDualCameraNode::capture_loop, this, 0);
+        thread_cam1_ = std::thread(&CSIDualCameraNode::capture_loop, this, 1);
+
+        RCLCPP_INFO(get_logger(), "✅ Dual Camera Node Ready!");
     }
 
     ~CSIDualCameraNode()
     {
-        RCLCPP_INFO(this->get_logger(), "🛑 Shutting down dual camera node...");
         running_.store(false);
-        
-        // Wait for threads to finish
-        if (thread_cam0_.joinable()) {
-            thread_cam0_.join();
-        }
-        if (thread_cam1_.joinable()) {
-            thread_cam1_.join();
-        }
-        
-        // Stop camera streams
-        stop_camera(rpicam_pipe_cam0_);
-        stop_camera(rpicam_pipe_cam1_);
-        
-        RCLCPP_INFO(this->get_logger(), "✅ Cleanup complete");
+        if (thread_cam0_.joinable()) thread_cam0_.join();
+        if (thread_cam1_.joinable()) thread_cam1_.join();
+        { std::lock_guard<std::mutex> lk(mtx_cam0_); kill_cam_process(cam0_); }
+        { std::lock_guard<std::mutex> lk(mtx_cam1_); kill_cam_process(cam1_); }
     }
 
 private:
     void full_system_cleanup()
     {
-        RCLCPP_INFO(this->get_logger(), "  🧹 Cleaning up old processes...");
+        std::system("pkill -9 rpicam-vid   2>/dev/null");
         std::system("pkill -9 rpicam-hello 2>/dev/null");
-        std::system("pkill -9 rpicam-vid 2>/dev/null");
         std::system("pkill -9 rpicam-still 2>/dev/null");
-        rclcpp::sleep_for(std::chrono::milliseconds(300));
-        RCLCPP_INFO(this->get_logger(), "  ✓ Cleanup done");
+        std::system("pkill -9 libcamera    2>/dev/null");  // FIX: thêm dòng này
+        rclcpp::sleep_for(std::chrono::milliseconds(800));
     }
-    
-    bool start_camera(int cam_id, FILE*& pipe)
+
+    // Helper: đợi frame thực sự từ camera, trả về false nếu timeout
+    bool wait_for_first_frame(int fd, const char* name, int timeout_sec)
     {
-        RCLCPP_INFO(this->get_logger(), "  🎥 Starting CAM%d stream...", cam_id);
-        
-        // Build rpicam-vid command
-        std::string cmd = "rpicam-vid --camera " + std::to_string(cam_id) + 
-                         " -t 0 --nopreview --codec yuv420 " +
-                         "--width " + std::to_string(target_width_) + " " +
-                         "--height " + std::to_string(target_height_) + " " +
-                         "--framerate " + std::to_string(target_fps_) + " " +
-                         "--flush -o - 2>/dev/null";
-        
-        RCLCPP_INFO(this->get_logger(), "  📹 CMD: %s", cmd.c_str());
-        
-        pipe = popen(cmd.c_str(), "r");
-        
-        if (!pipe) {
-            RCLCPP_ERROR(this->get_logger(), "  ❌ Failed to launch rpicam-vid for CAM%d!", cam_id);
-            return false;
+        RCLCPP_INFO(get_logger(), "⏳ Waiting for %s first frame...", name);
+        std::vector<uint8_t> buf(yuv_frame_size_);
+        const auto timeout = std::chrono::steady_clock::now()
+                             + std::chrono::seconds(timeout_sec);
+        while (std::chrono::steady_clock::now() < timeout) {
+            if (read_frame(fd, buf)) {
+                RCLCPP_INFO(get_logger(), "✅ %s streaming", name);
+                return true;
+            }
+            rclcpp::sleep_for(std::chrono::milliseconds(50));
         }
-        
-        RCLCPP_INFO(this->get_logger(), "  ✓ CAM%d opened! YUV420: %zu bytes/frame", cam_id, yuv_frame_size_);
+        RCLCPP_ERROR(get_logger(), "❌ %s never started streaming!", name);
+        return false;
+    }
+
+    // FIX: timeout 200ms → 500ms, tránh false disconnect
+    bool read_frame(int fd, std::vector<uint8_t>& buf)
+    {
+        if (fd < 0 || yuv_frame_size_ == 0) return false;
+
+        size_t total = 0;
+        const auto deadline =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+        while (total < yuv_frame_size_) {
+            auto now = std::chrono::steady_clock::now();
+            if (now >= deadline) return false;
+
+            auto remaining_us =
+                std::chrono::duration_cast<std::chrono::microseconds>(
+                    deadline - now).count();
+
+            fd_set rfds;
+            FD_ZERO(&rfds);
+            FD_SET(fd, &rfds);
+            struct timeval tv;
+            tv.tv_sec  = 0;
+            tv.tv_usec = static_cast<suseconds_t>(
+                std::min<long>(remaining_us, 40000));
+
+            int ret = select(fd + 1, &rfds, nullptr, nullptr, &tv);
+            if (ret < 0 && errno == EINTR) continue;
+            if (ret <= 0) return false;
+
+            ssize_t n = read(fd, buf.data() + total, yuv_frame_size_ - total);
+            if (n < 0) {
+                if (errno == EAGAIN || errno == EWOULDBLOCK) continue;
+                return false;
+            }
+            if (n == 0) return false;
+            total += static_cast<size_t>(n);
+        }
         return true;
     }
-    
-    void stop_camera(FILE*& pipe)
-    {
-        if (pipe) {
-            pclose(pipe);
-            pipe = nullptr;
-        }
-    }
 
-    void capture_loop_cam0()
+    void capture_loop(int cam_id)
     {
-        RCLCPP_INFO(this->get_logger(), "🎬 CAM0 capture thread started");
-        
-        std::vector<uint8_t> yuv_buffer(yuv_frame_size_);
-        cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_, CV_8UC1);
-        cv::Mat bgr_frame(target_height_, target_width_, CV_8UC3);
-        
+        RCLCPP_INFO(get_logger(), "🎬 CAM%d capture thread started", cam_id);
+
+        std::vector<uint8_t> yuv_buf(yuv_frame_size_);
+        cv::Mat bgr(target_height_, target_width_, CV_8UC3);
+
+        // FIX: threshold 3s → 6s, tránh reconnect quá sớm
+        const int FAIL_THRESHOLD = (target_fps_ > 0 ? target_fps_ : 20) * 6;
+        int fails = 0;
+
+        auto startup_deadline =
+            std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        bool grace_warned = false;
+
         while (running_.load() && rclcpp::ok()) {
-            if (!capture_and_publish(rpicam_pipe_cam0_, yuv_buffer, yuv_mat, bgr_frame, 
-                                    pub_cam0_, "camera_input_tray", 0)) {
-                rclcpp::sleep_for(std::chrono::milliseconds(10));
+
+            // FIX: Giữ lock trong suốt quá trình đọc
+            // → fd không thể bị close bởi reconnect/destructor trong lúc read
+            bool frame_ok;
+            {
+                std::lock_guard<std::mutex> lk(
+                    (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
+                int fd = (cam_id == 0) ? cam0_.fd : cam1_.fd;
+                frame_ok = read_frame(fd, yuv_buf);
             }
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "🛑 CAM0 capture thread stopped");
-    }
 
-    void capture_loop_cam1()
-    {
-        RCLCPP_INFO(this->get_logger(), "🎬 CAM1 capture thread started");
-        
-        std::vector<uint8_t> yuv_buffer(yuv_frame_size_);
-        cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_, CV_8UC1);
-        cv::Mat bgr_frame(target_height_, target_width_, CV_8UC3);
-        
-        while (running_.load() && rclcpp::ok()) {
-            if (!capture_and_publish(rpicam_pipe_cam1_, yuv_buffer, yuv_mat, bgr_frame, 
-                                    pub_cam1_, "camera_output_tray", 1)) {
-                rclcpp::sleep_for(std::chrono::milliseconds(10));
+            if (!frame_ok) {
+                if (std::chrono::steady_clock::now() < startup_deadline) {
+                    if (!grace_warned) {
+                        RCLCPP_INFO(get_logger(),
+                            "⏳ CAM%d: waiting for stream...", cam_id);
+                        grace_warned = true;
+                    }
+                    rclcpp::sleep_for(std::chrono::milliseconds(100));
+                    continue;
+                }
+
+                fails++;
+                if (fails < FAIL_THRESHOLD) {
+                    rclcpp::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+
+                RCLCPP_WARN(get_logger(),
+                    "⚠️  CAM%d: %d consecutive failures — reconnecting...",
+                    cam_id, fails);
+
+                // FIX: Global reconnect lock — chỉ 1 cam reconnect tại 1 thời điểm
+                // Ngăn CAM1 reconnect cùng lúc CAM0, tránh CSI bus conflict
+                {
+                    std::lock_guard<std::mutex> recon_lk(mtx_reconnect_);
+
+                    {
+                        std::lock_guard<std::mutex> lk(
+                            (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
+                        CamProcess& cp = (cam_id == 0) ? cam0_ : cam1_;
+                        kill_cam_process(cp);
+                    }
+
+                    rclcpp::sleep_for(std::chrono::milliseconds(1000));
+
+                    CamProcess new_cp = launch_rpicam(
+                        cam_id, target_width_, target_height_, target_fps_);
+
+                    {
+                        std::lock_guard<std::mutex> lk(
+                            (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
+                        CamProcess& cp = (cam_id == 0) ? cam0_ : cam1_;
+                        if (new_cp.pid > 0) {
+                            cp = new_cp;
+                            RCLCPP_INFO(get_logger(),
+                                "✅ CAM%d reconnected (pid=%d)", cam_id, cp.pid);
+                        } else {
+                            RCLCPP_ERROR(get_logger(),
+                                "❌ CAM%d reconnect failed — retry in 2s", cam_id);
+                        }
+                    }
+
+                    if (new_cp.pid > 0) {
+                        startup_deadline = std::chrono::steady_clock::now()
+                                           + std::chrono::seconds(10);
+                        grace_warned = false;
+                        rclcpp::sleep_for(std::chrono::milliseconds(1000));
+                    } else {
+                        rclcpp::sleep_for(std::chrono::milliseconds(2000));
+                    }
+                }
+
+                fails = 0;
+                continue;
             }
-        }
-        
-        RCLCPP_INFO(this->get_logger(), "🛑 CAM1 capture thread stopped");
-    }
 
-    bool capture_and_publish(FILE* pipe, std::vector<uint8_t>& yuv_buffer, 
-                            cv::Mat& yuv_mat, cv::Mat& bgr_frame,
-                            rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr publisher,
-                            const std::string& frame_id, int cam_id)
-    {
-        if (!pipe) {
-            return false;
-        }
+            // Frame OK
+            fails = 0;
+            grace_warned = false;
 
-        // Check if data is available (non-blocking)
-        fd_set readfds;
-        FD_ZERO(&readfds);
-        int fd = fileno(pipe);
-        FD_SET(fd, &readfds);
+            cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_,
+                            CV_8UC1, yuv_buf.data());
+            cv::cvtColor(yuv_mat, bgr, cv::COLOR_YUV2BGR_I420);
 
-        struct timeval timeout;
-        timeout.tv_sec = 0;
-        timeout.tv_usec = 5000; // 5ms timeout
+            std_msgs::msg::Header hdr;
+            hdr.stamp    = now();
+            hdr.frame_id = (cam_id == 0) ? "camera_input_tray"
+                                          : "camera_output_tray";
 
-        int ready = select(fd + 1, &readfds, NULL, NULL, &timeout);
-        
-        if (ready <= 0) {
-            return false; // No data or error
+            auto msg = cv_bridge::CvImage(hdr, "bgr8", bgr).toImageMsg();
+
+            if (cam_id == 0 && pub_cam0_) pub_cam0_->publish(*msg);
+            else if (cam_id == 1 && pub_cam1_) pub_cam1_->publish(*msg);
         }
 
-        // Read YUV420 frame data
-        size_t bytes_read = fread(yuv_buffer.data(), 1, yuv_frame_size_, pipe);
-        
-        if (bytes_read != yuv_frame_size_) {
-            // Incomplete frame - normal at boundaries
-            return false;
-        }
-
-        // Zero-copy conversion: reuse pre-allocated matrices
-        yuv_mat.data = yuv_buffer.data();
-        cv::cvtColor(yuv_mat, bgr_frame, cv::COLOR_YUV2BGR_I420);
-
-        // Prepare message header
-        std_msgs::msg::Header header;
-        header.stamp = now();
-        header.frame_id = frame_id;
-
-        // Publish frame
-        auto msg = cv_bridge::CvImage(header, "bgr8", bgr_frame).toImageMsg();
-        
-        if (publisher) {
-            publisher->publish(*msg);
-        }
-        
-        return true;
+        RCLCPP_INFO(get_logger(), "🛑 CAM%d capture thread stopped", cam_id);
     }
 
     // Members
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_cam0_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_cam1_;
-    
-    FILE* rpicam_pipe_cam0_ = nullptr;
-    FILE* rpicam_pipe_cam1_ = nullptr;
-    
+
+    CamProcess  cam0_;
+    CamProcess  cam1_;
+    std::mutex  mtx_cam0_;
+    std::mutex  mtx_cam1_;
+    std::mutex  mtx_reconnect_;  // FIX: serialize reconnects
+
     std::thread thread_cam0_;
     std::thread thread_cam1_;
     std::atomic<bool> running_;
-    
-    int target_width_;
-    int target_height_;
-    int target_fps_;
-    size_t yuv_frame_size_;
-    
+
+    int    target_width_  {};
+    int    target_height_ {};
+    int    target_fps_    {};
+    size_t yuv_frame_size_{};
+
     std::string cam0_topic_;
     std::string cam1_topic_;
 };
 
-int main(int argc, char **argv)
+int main(int argc, char** argv)
 {
     rclcpp::init(argc, argv);
     auto node = std::make_shared<CSIDualCameraNode>();
@@ -254,40 +367,3 @@ int main(int argc, char **argv)
     rclcpp::shutdown();
     return 0;
 }
-
-/*
-================================================================================
-🎯 DUAL CAMERA NODE - PARALLEL MODE
-================================================================================
-
-This node runs TWO cameras simultaneously on Raspberry Pi 5:
-- CAM0 (Input Tray): --camera 0
-- CAM1 (Output Tray): --camera 1
-
-Key Features:
-1. **Parallel Capture**: Two independent threads, one per camera
-2. **No Switching**: Both cameras always active
-3. **Independent Publishers**: 
-   - cam0Funai/image_raw (Input Tray)
-   - cam1Funai/image_raw (Output Tray)
-4. **Thread-safe**: Each thread has its own buffers
-
-Performance:
-- 2x rpicam-vid processes
-- 2x capture threads
-- Minimal overhead with zero-copy YUV→BGR conversion
-
-Hardware:
-- Arducam GMSL2 8MP Camera Extension Kit
-- 2x IMX219 cameras
-- Raspberry Pi 5 with dual CSI support
-
-Usage:
-  ros2 run csi_camera csi_dual_camera_node
-
-Topics:
-  ros2 topic hz /cam0Funai/image_raw
-  ros2 topic hz /cam1Funai/image_raw
-
-================================================================================
-*/
