@@ -27,8 +27,11 @@ namespace {
         if (sp) {
             return sp;
         }
-        // Tạo mới
-        auto vdev_exp = hailort::VDevice::create(); // Expected<std::unique_ptr<VDevice>>
+        // Tạo mới với Multi-Network Scheduler để hỗ trợ chạy nhiều model HEF cùng lúc
+        hailo_vdevice_params_t params;
+        hailo_init_vdevice_params(&params);
+        params.scheduling_algorithm = HAILO_SCHEDULING_ALGORITHM_ROUND_ROBIN;
+        auto vdev_exp = hailort::VDevice::create(params); // Expected<std::unique_ptr<VDevice>>
         if (!vdev_exp) {
             std::ostringstream oss;
             oss << "Failed to create shared VDevice, status=" << static_cast<int>(vdev_exp.status());
@@ -52,6 +55,10 @@ hailo_status YoloHailoRT::init_device(
     // VStreams &vstreams)
     std::shared_ptr<VStreams> &vstreams)
 {
+    // Cấm các thread gọi configure phần cứng cùng lúc (chống deadlock PCIe)
+    static std::mutex init_mtx;
+    std::lock_guard<std::mutex> lock(init_mtx);
+
     // auto vdevice_exp = VDevice::create();
     // if (!vdevice_exp) {
     //     std::cerr << "Failed create vdevice, status = " << vdevice_exp.status() << std::endl;

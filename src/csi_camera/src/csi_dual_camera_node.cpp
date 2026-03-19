@@ -17,7 +17,29 @@ using std::placeholders::_1;
 
 struct CamProcess {
     pid_t pid = -1;
-    int   fd  = -1;
+    std::atomic<int> fd{-1};  // atomic: đọc fd an toàn không cần lock
+
+    CamProcess() = default;
+
+    // std::atomic deletes copy/move, define manually
+    CamProcess(CamProcess&& o) noexcept
+        : pid(o.pid), fd(o.fd.load())
+    {
+        o.pid = -1;
+        o.fd.store(-1);
+    }
+    CamProcess& operator=(CamProcess&& o) noexcept
+    {
+        if (this != &o) {
+            pid = o.pid;
+            fd.store(o.fd.load());
+            o.pid = -1;
+            o.fd.store(-1);
+        }
+        return *this;
+    }
+    CamProcess(const CamProcess&) = delete;
+    CamProcess& operator=(const CamProcess&) = delete;
 };
 
 static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
@@ -71,7 +93,7 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
 
     CamProcess cp;
     cp.pid = pid;
-    cp.fd  = pipefd[0];
+    cp.fd.store(pipefd[0]);
     return cp;
 }
 
@@ -82,9 +104,9 @@ static void kill_cam_process(CamProcess& cp)
         waitpid(cp.pid, nullptr, 0);
         cp.pid = -1;
     }
-    if (cp.fd >= 0) {
-        close(cp.fd);
-        cp.fd = -1;
+    int fd = cp.fd.exchange(-1);
+    if (fd >= 0) {
+        close(fd);
     }
 }
 
@@ -124,7 +146,7 @@ public:
         }
 
         // Đợi CAM0 stream ổn định (frame thực sự, không phải delay cứng)
-        if (!wait_for_first_frame(cam0_.fd, "CAM0", 15)) {
+        if (!wait_for_first_frame(cam0_.fd.load(), "CAM0", 8)) {
             kill_cam_process(cam0_); return;
         }
 
@@ -136,7 +158,7 @@ public:
             kill_cam_process(cam0_); return;
         }
 
-        wait_for_first_frame(cam1_.fd, "CAM1", 15);  // non-fatal nếu fail
+        wait_for_first_frame(cam1_.fd.load(), "CAM1", 8);  // non-fatal nếu fail
 
         thread_cam0_ = std::thread(&CSIDualCameraNode::capture_loop, this, 0);
         thread_cam1_ = std::thread(&CSIDualCameraNode::capture_loop, this, 1);
@@ -156,11 +178,32 @@ public:
 private:
     void full_system_cleanup()
     {
+        RCLCPP_INFO(get_logger(), "  🧹 Cleaning up old processes...");
         std::system("pkill -9 rpicam-vid   2>/dev/null");
         std::system("pkill -9 rpicam-hello 2>/dev/null");
         std::system("pkill -9 rpicam-still 2>/dev/null");
-        std::system("pkill -9 libcamera    2>/dev/null");  // FIX: thêm dòng này
-        rclcpp::sleep_for(std::chrono::milliseconds(800));
+        std::system("pkill -9 libcamera    2>/dev/null");
+
+        rclcpp::sleep_for(std::chrono::milliseconds(500));
+
+        // Reap zombie children of this process
+        while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+
+        // Verify no LIVE (non-zombie) rpicam-vid remains
+        // pgrep alone also finds zombies (Z state) which can't be killed
+        const char* live_check =
+            "ps -eo stat,comm | grep -v Z | grep -q rpicam-vid";
+        for (int i = 0; i < 20; i++) {
+            if (std::system(live_check) != 0) {
+                RCLCPP_INFO(get_logger(), "  ✓ All rpicam processes cleaned");
+                return;
+            }
+            RCLCPP_WARN(get_logger(), "  ⏳ Waiting for rpicam-vid to die... (%d/20)", i + 1);
+            std::system("pkill -9 rpicam-vid 2>/dev/null");
+            rclcpp::sleep_for(std::chrono::milliseconds(150));
+            while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+        }
+        RCLCPP_WARN(get_logger(), "  ⚠️ Some rpicam processes may still be alive!");
     }
 
     // Helper: đợi frame thực sự từ camera, trả về false nếu timeout
@@ -181,30 +224,24 @@ private:
         return false;
     }
 
-    // FIX: timeout 200ms → 500ms, tránh false disconnect
     bool read_frame(int fd, std::vector<uint8_t>& buf)
     {
         if (fd < 0 || yuv_frame_size_ == 0) return false;
 
         size_t total = 0;
-        const auto deadline =
-            std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+
+        const int fps = (target_fps_ > 0) ? target_fps_ : 20;
+        const int chunk_timeout_ms = std::max(500, 3000 / fps);
 
         while (total < yuv_frame_size_) {
-            auto now = std::chrono::steady_clock::now();
-            if (now >= deadline) return false;
-
-            auto remaining_us =
-                std::chrono::duration_cast<std::chrono::microseconds>(
-                    deadline - now).count();
+            if (!running_.load()) return false;
 
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(fd, &rfds);
             struct timeval tv;
-            tv.tv_sec  = 0;
-            tv.tv_usec = static_cast<suseconds_t>(
-                std::min<long>(remaining_us, 40000));
+            tv.tv_sec  = chunk_timeout_ms / 1000;
+            tv.tv_usec = (chunk_timeout_ms % 1000) * 1000;
 
             int ret = select(fd + 1, &rfds, nullptr, nullptr, &tv);
             if (ret < 0 && errno == EINTR) continue;
@@ -234,28 +271,26 @@ private:
 
         auto startup_deadline =
             std::chrono::steady_clock::now() + std::chrono::seconds(10);
-        bool grace_warned = false;
 
         while (running_.load() && rclcpp::ok()) {
 
             // FIX: Giữ lock trong suốt quá trình đọc
             // → fd không thể bị close bởi reconnect/destructor trong lúc read
-            bool frame_ok;
+            // FIX: Chỉ lock khi lấy fd snapshot, rồi đọc ngoài lock
+            // Tránh deadlock: destructor cần lock để kill_cam_process
+            int fd;
             {
                 std::lock_guard<std::mutex> lk(
                     (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
-                int fd = (cam_id == 0) ? cam0_.fd : cam1_.fd;
-                frame_ok = read_frame(fd, yuv_buf);
+                fd = (cam_id == 0) ? cam0_.fd.load() : cam1_.fd.load();
             }
+            bool frame_ok = read_frame(fd, yuv_buf);
 
             if (!frame_ok) {
                 if (std::chrono::steady_clock::now() < startup_deadline) {
-                    if (!grace_warned) {
-                        RCLCPP_INFO(get_logger(),
-                            "⏳ CAM%d: waiting for stream...", cam_id);
-                        grace_warned = true;
-                    }
-                    rclcpp::sleep_for(std::chrono::milliseconds(100));
+                    // Grace period: camera warming up, don't count as failure
+                    while (waitpid(-1, nullptr, WNOHANG) > 0) {}
+                    rclcpp::sleep_for(std::chrono::milliseconds(50));
                     continue;
                 }
 
@@ -269,11 +304,10 @@ private:
                     "⚠️  CAM%d: %d consecutive failures — reconnecting...",
                     cam_id, fails);
 
-                // FIX: Global reconnect lock — chỉ 1 cam reconnect tại 1 thời điểm
-                // Ngăn CAM1 reconnect cùng lúc CAM0, tránh CSI bus conflict
                 {
                     std::lock_guard<std::mutex> recon_lk(mtx_reconnect_);
 
+                    // Kill only THIS camera's process
                     {
                         std::lock_guard<std::mutex> lk(
                             (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
@@ -281,17 +315,32 @@ private:
                         kill_cam_process(cp);
                     }
 
-                    rclcpp::sleep_for(std::chrono::milliseconds(1000));
+                    // Wait for device to be released by the kernel
+                    rclcpp::sleep_for(std::chrono::milliseconds(800));
+                    while (waitpid(-1, nullptr, WNOHANG) > 0) {}
 
+                    if (!running_.load()) break;
+
+                    // Spawn only THIS camera back
                     CamProcess new_cp = launch_rpicam(
                         cam_id, target_width_, target_height_, target_fps_);
+
+                    // Zombie-detect: check 300ms after spawn
+                    rclcpp::sleep_for(std::chrono::milliseconds(300));
+                    if (new_cp.pid > 0) {
+                        if (waitpid(new_cp.pid, nullptr, WNOHANG) != 0) {
+                            RCLCPP_ERROR(get_logger(),
+                                "❌ CAM%d rpicam-vid died immediately! Device busy?", cam_id);
+                            new_cp.pid = -1;
+                        }
+                    }
 
                     {
                         std::lock_guard<std::mutex> lk(
                             (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
                         CamProcess& cp = (cam_id == 0) ? cam0_ : cam1_;
                         if (new_cp.pid > 0) {
-                            cp = new_cp;
+                            cp = std::move(new_cp);
                             RCLCPP_INFO(get_logger(),
                                 "✅ CAM%d reconnected (pid=%d)", cam_id, cp.pid);
                         } else {
@@ -300,11 +349,10 @@ private:
                         }
                     }
 
+                    startup_deadline = std::chrono::steady_clock::now()
+                                       + std::chrono::seconds(8);
                     if (new_cp.pid > 0) {
-                        startup_deadline = std::chrono::steady_clock::now()
-                                           + std::chrono::seconds(10);
-                        grace_warned = false;
-                        rclcpp::sleep_for(std::chrono::milliseconds(1000));
+                        rclcpp::sleep_for(std::chrono::milliseconds(500));
                     } else {
                         rclcpp::sleep_for(std::chrono::milliseconds(2000));
                     }
@@ -316,7 +364,6 @@ private:
 
             // Frame OK
             fails = 0;
-            grace_warned = false;
 
             cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_,
                             CV_8UC1, yuv_buf.data());
@@ -331,6 +378,9 @@ private:
 
             if (cam_id == 0 && pub_cam0_) pub_cam0_->publish(*msg);
             else if (cam_id == 1 && pub_cam1_) pub_cam1_->publish(*msg);
+
+            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
+                "✓ CAM%d publishing frames", cam_id);
         }
 
         RCLCPP_INFO(get_logger(), "🛑 CAM%d capture thread stopped", cam_id);

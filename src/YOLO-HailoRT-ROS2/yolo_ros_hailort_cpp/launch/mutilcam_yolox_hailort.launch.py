@@ -27,7 +27,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'model_path_cam1',
-            default_value='/home/pi/yolov8s.hef',
+            default_value='/home/pi/yolov8s_trayoutput.hef',
             description='HEF model path for Cam1 (Output Tray).'
         ),
         DeclareLaunchArgument(
@@ -58,10 +58,10 @@ def generate_launch_description():
     ]
 
     container = ComposableNodeContainer(
-        name='yolo_container',
+        name='yolo_container_funai',
         namespace='',
         package='rclcpp_components',
-        executable='component_container',
+        executable='component_container_mt',
         composable_node_descriptions=[
             # CAM 0 NODE (Input Tray)
             ComposableNode(
