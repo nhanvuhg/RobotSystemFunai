@@ -19,8 +19,8 @@ int main(int argc, char *argv[])
 
     // ============================
     std::vector<std::string> topics = {
-        "/camera/image_raw_blue",
-        "/camera/image_raw_yellow"
+        "/cam0Funai/image_overlay",
+        "/cam1Funai/image_overlay"
     };   
 
     camNode->setup(topics);
