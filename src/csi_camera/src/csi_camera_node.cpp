@@ -27,7 +27,7 @@ public:
         // --- Parameters ---
         this->declare_parameter("width", 1280);
         this->declare_parameter("height", 720);
-        this->declare_parameter("fps", 10);  // Match USB camera: 5 fps for stable detection
+        this->declare_parameter("fps", 30);  // MUST be 30fps on Pi 5 IMX477 to prevent CFE pipeline timeout
         this->declare_parameter("output_topic", std::string("/ai/image_overlay"));
         
         output_topic_ = this->get_parameter("output_topic").as_string();
@@ -150,23 +150,9 @@ private:
         rclcpp::sleep_for(std::chrono::milliseconds(stabilization_ms));
         
         // Quick verification
-        RCLCPP_INFO(this->get_logger(), "  🔍 Verifying camera...");
-        std::string check_cmd = "rpicam-hello --list-cameras 2>&1 | grep -q 'Available cameras'";
-        
-        for (int i = 0; i < 3; i++) {
-            if (std::system(check_cmd.c_str()) == 0) {
-                RCLCPP_INFO(this->get_logger(), "  ✓ Camera detected");
-                return true;
-            }
-            
-            if (i < 2) {
-                RCLCPP_INFO(this->get_logger(), "  ⏳ Retry %d/3...", i + 1);
-                rclcpp::sleep_for(std::chrono::milliseconds(400));
-            }
-        }
-        
-        RCLCPP_ERROR(this->get_logger(), "  ❌ Camera not detected after 3 attempts");
-        return false;
+        // Quick verification bypassed: rpicam-hello --list-cameras hangs permanently on Pi 5 IMX477 setups
+        RCLCPP_INFO(this->get_logger(), "  ✓ Bypassing camera verification due to libcamera hard-lock bug");
+        return true;
     }
     
     void camera_select_callback(const std_msgs::msg::Int32::SharedPtr msg)
