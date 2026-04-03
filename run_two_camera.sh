@@ -22,7 +22,7 @@ LOG_DIR="$WS_PATH/logs"
 
 # [FIX-ARCH] Prevent parallel launching scripts from fighting over resources
 echo "🛑 Ensuring no OTHER launchers are running..."
-for pid in $(pgrep -f "run_all_nodes.sh\|run_two_camera.sh"); do
+for pid in $(pgrep -f "run_two_camera.sh"); do
     if [ "$pid" != "$$" ]; then
         kill -TERM "$pid" 2>/dev/null
     fi
