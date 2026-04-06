@@ -174,24 +174,18 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
 // =============================================================================
 static void kill_cam_process(CamProcess& cp)
 {
-    if (cp.pid > 0) {
-        kill(cp.pid, SIGKILL);
-        waitpid(cp.pid, nullptr, 0);
-        cp.pid = -1;
-    }
+    // Close pipe FIRST to send SIGPIPE to the writer and stop kernel block
     int fd = cp.fd.exchange(-1);
     if (fd >= 0) {
-        uint8_t drain_buf[4096];
-        while (true) {
-            fd_set rfds;
-            FD_ZERO(&rfds);
-            FD_SET(fd, &rfds);
-            struct timeval tv = {0, 0};  
-            if (select(fd + 1, &rfds, nullptr, nullptr, &tv) <= 0) break;
-            ssize_t n = read(fd, drain_buf, sizeof(drain_buf));
-            if (n <= 0) break;
-        }
         close(fd);
+    }
+
+    if (cp.pid > 0) {
+        kill(cp.pid, SIGTERM);
+        usleep(100000); // Wait 100ms for graceful V4L2 unmap
+        kill(cp.pid, SIGKILL); // Force kill if still stubbornly alive
+        waitpid(cp.pid, nullptr, 0);
+        cp.pid = -1;
     }
 }
 
