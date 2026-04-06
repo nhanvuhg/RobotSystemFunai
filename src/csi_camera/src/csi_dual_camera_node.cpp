@@ -37,6 +37,7 @@
 #include <cstdlib>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <atomic>
 #include <sys/select.h>
 #include <sys/wait.h>
@@ -150,8 +151,9 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
     // Parent process
     close(pipefd[1]);
 
-    // Increase pipe buffer to 1MB — reduces dropped frames on burst writes
-    fcntl(pipefd[0], F_SETPIPE_SZ, 1 * 1024 * 1024);
+    // Increase pipe buffer to 8MB — holds ~3 frames (1280x720 YUV420 = 2.76MB each)
+    // Prevents rpicam-vid write() from blocking when YOLO inference stalls reader thread
+    fcntl(pipefd[0], F_SETPIPE_SZ, 8 * 1024 * 1024);
 
     struct timespec ts = {0, 300 * 1000 * 1000};  // 300ms
     nanosleep(&ts, nullptr);
@@ -214,8 +216,8 @@ public:
         cam0_topic_    = get_parameter("cam0_topic").as_string();
         cam1_topic_    = get_parameter("cam1_topic").as_string();
 
-        pub_cam0_ = create_publisher<sensor_msgs::msg::Image>(cam0_topic_, 10);
-        pub_cam1_ = create_publisher<sensor_msgs::msg::Image>(cam1_topic_, 10);
+        pub_cam0_ = create_publisher<sensor_msgs::msg::Image>(cam0_topic_, 50);
+        pub_cam1_ = create_publisher<sensor_msgs::msg::Image>(cam1_topic_, 50);
 
         yuv_frame_size_ = (size_t)target_width_ * target_height_ * 3 / 2;
         // At 2028x1080 (native mode): 2028 * 1080 * 3/2 = 3,285,360 bytes ≈ 3.1 MB/frame
@@ -405,6 +407,7 @@ private:
             // --- DECOUPLED READER THREAD ---
             std::atomic<bool> reader_running{true};
             std::mutex mtx_latest;
+            std::condition_variable cv_frame_ready;
             std::vector<uint8_t> latest_yuv(yuv_frame_size_);
             bool new_frame = false;
             auto last_frame_time = std::chrono::steady_clock::now();
@@ -414,12 +417,16 @@ private:
                 while (reader_running.load()) {
                     if (!read_frame(fd_dup, local_buf)) {
                         reader_running.store(false);
+                        cv_frame_ready.notify_one();
                         break;
                     }
-                    std::lock_guard<std::mutex> rlk(mtx_latest);
-                    latest_yuv = local_buf;
-                    new_frame = true;
-                    last_frame_time = std::chrono::steady_clock::now();
+                    {
+                        std::lock_guard<std::mutex> rlk(mtx_latest);
+                        latest_yuv = local_buf;
+                        new_frame = true;
+                        last_frame_time = std::chrono::steady_clock::now();
+                    }
+                    cv_frame_ready.notify_one();
                 }
             });
 
@@ -427,28 +434,38 @@ private:
             while (reader_running.load() && running_.load() && rclcpp::ok()) {
                 bool got_frame = false;
                 {
-                    std::lock_guard<std::mutex> rlk(mtx_latest);
-                    if (new_frame) {
-                        yuv_buf = latest_yuv;  // Copy buffer for processing
-                        new_frame = false;
-                        got_frame = true;
+                    std::unique_lock<std::mutex> rlk(mtx_latest);
+                    // Wait for frame with 8s timeout (allows ISP processing time)
+                    if (cv_frame_ready.wait_for(rlk, std::chrono::seconds(8),
+                            [&new_frame](){ return new_frame; })) {
+                        if (new_frame) {
+                            yuv_buf = latest_yuv;  // Copy buffer for processing
+                            new_frame = false;
+                            got_frame = true;
+                        }
                     }
                 }
 
                 if (!got_frame) {
-                    // Timeout watchdog to trigger reconnect if reader gets stuck
-                    if (std::chrono::steady_clock::now() - last_frame_time > std::chrono::seconds(3)) {
+                    if (!reader_running.load()) {
                         frame_ok = false;
-                        RCLCPP_WARN(get_logger(), "CAM%d: Pipe reader timeout (No data for 3s)", cam_id);
                         break;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    // Timeout watchdog to trigger reconnect if reader gets stuck
+                    if (std::chrono::steady_clock::now() - last_frame_time > std::chrono::seconds(8)) {
+                        frame_ok = false;
+                        RCLCPP_WARN(get_logger(), "CAM%d: Pipe reader timeout (No data for 8s)", cam_id);
+                        break;
+                    }
                     continue;
                 }
 
                 fails = 0;
                 reconnect_attempts = 0;  // reset backoff on successful recovery
 
+                // Process frame OUTSIDE mutex to avoid blocking reader thread
+                // This is CRITICAL: cvtColor + publish can take 50-100ms on RPi5
+                // If held under lock, reader thread blocks → rpicam pipe overflows
                 cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_,
                                 CV_8UC1, yuv_buf.data());
                 cv::cvtColor(yuv_mat, bgr, cv::COLOR_YUV2BGR_I420);
@@ -460,6 +477,7 @@ private:
 
                 auto msg = cv_bridge::CvImage(hdr, "bgr8", bgr).toImageMsg();
 
+                // Publish OUTSIDE critical section to prevent reader thread stall
                 if      (cam_id == 0 && pub_cam0_) pub_cam0_->publish(*msg);
                 else if (cam_id == 1 && pub_cam1_) pub_cam1_->publish(*msg);
 

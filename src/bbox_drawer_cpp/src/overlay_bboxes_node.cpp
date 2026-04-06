@@ -104,7 +104,10 @@ public:
         boxes_sub_.reset(new message_filters::Subscriber<BoxesMsg>(this, boxes_topic_));
 
         using Policy = message_filters::sync_policies::ApproximateTime<ImageMsg, BoxesMsg>;
-        sync_.reset(new message_filters::Synchronizer<Policy>(Policy(10), *image_sub_, *boxes_sub_));
+        // [FIX-3] Increase queue from 10→30 to handle YOLO inference lag (~50ms when detecting)
+        sync_.reset(new message_filters::Synchronizer<Policy>(Policy(30), *image_sub_, *boxes_sub_));
+        // Allow 200ms skew tolerance — YOLO detection callback can lag behind camera frames
+        sync_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(0.2));
         sync_->registerCallback(std::bind(&OverlayForOneCam::callback, this, std::placeholders::_1, std::placeholders::_2));
 
         pub_ = image_transport::create_publisher(this, output_topic_);

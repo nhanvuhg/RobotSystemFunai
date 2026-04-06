@@ -210,6 +210,24 @@ echo "✓ System ready"
 echo ""
 
 # =============================================================================
+# Increase kernel pipe buffer to 8MB
+#
+# [FIX-1-KERNEL] Default pipe buffer is 1MB, insufficient for YUV420 frames.
+#                 1280x720 YUV420 = 2.76MB per frame @ 30fps.
+#                 With 1 frame period = 33ms, rpicam-vid fills pipe faster
+#                 than reader thread can drain it while YOLO inference stalls.
+#                 8MB buffer holds ~3 frames and prevents write() blocking.
+# =============================================================================
+echo "🔧 Setting kernel pipe buffer size to 8MB..."
+echo 8388608 | sudo tee /proc/sys/fs/pipe-max-size > /dev/null
+if [ "$(cat /proc/sys/fs/pipe-max-size)" -eq 8388608 ]; then
+    echo "✓ Pipe buffer set to 8MB"
+else
+    echo "⚠️  Could not set pipe buffer — may cause frame drops if YOLO inference lags"
+fi
+echo ""
+
+# =============================================================================
 # Launch nodes
 #
 # [FIX-C] CSI Camera delay: 4s → 8s

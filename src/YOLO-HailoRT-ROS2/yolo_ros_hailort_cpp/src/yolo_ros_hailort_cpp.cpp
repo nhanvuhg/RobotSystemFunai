@@ -40,10 +40,15 @@ namespace yolo_ros_hailort_cpp
 
         RCLCPP_INFO(this->get_logger(), "model loaded");
 
+        // [FIX-2] Use best_effort QoS with depth=1 to drop frames instead of queuing
+        // When YOLO inference stalls (detecting objects), new frames are dropped instead
+        // of accumulating in buffer → prevents executor starvation and pipe backpressure
+        auto qos = rclcpp::QoS(1).best_effort();
         this->sub_image_ = image_transport::create_subscription(
             this, this->params_.src_image_topic_name,
             std::bind(&YoloNode::colorImageCallback, this, std::placeholders::_1),
-            "raw");
+            "raw",
+            qos.get_rmw_qos_profile());
 
 
         this->pub_detection2d_ = this->create_publisher<vision_msgs::msg::Detection2DArray>(
