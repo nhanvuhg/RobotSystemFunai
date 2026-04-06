@@ -16,7 +16,7 @@ def generate_launch_description():
     launch_args = [
         DeclareLaunchArgument(
             'shared_image_topic',
-            default_value='/ai/image_overlay',
+            default_value='/ai_Funai/image_overlay',
             description='Shared input image topic from CSI camera'
         ),
         DeclareLaunchArgument(
@@ -56,14 +56,14 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             # Camera 0 (Input Tray) parameters
-            'cam0.image_topic': shared_image,
+            'cam0.image_topic': '/cam0Funai/image_raw',
             'cam0.boxes_topic': cam0_boxes,
             'cam0.output_topic': '/cam0Funai/image_overlay',
             'cam0.output_width': out_width,
             'cam0.output_height': out_height,
             
             # Camera 1 (Output Tray) parameters
-            'cam1.image_topic': shared_image,
+            'cam1.image_topic': '/cam1Funai/image_raw',
             'cam1.boxes_topic': cam1_boxes,
             'cam1.output_topic': '/cam1Funai/image_overlay',
             'cam1.output_width': out_width,

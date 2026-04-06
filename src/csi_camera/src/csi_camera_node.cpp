@@ -28,7 +28,7 @@ public:
         this->declare_parameter("width", 1280);
         this->declare_parameter("height", 720);
         this->declare_parameter("fps", 30);  // MUST be 30fps on Pi 5 IMX477 to prevent CFE pipeline timeout
-        this->declare_parameter("output_topic", std::string("/ai/image_overlay"));
+        this->declare_parameter("output_topic", std::string("/ai_Funai/image_overlay"));
         
         output_topic_ = this->get_parameter("output_topic").as_string();
         target_width_ = this->get_parameter("width").as_int();
@@ -47,7 +47,7 @@ public:
                     output_topic_.c_str());
 
         sub_camera_select_ = this->create_subscription<std_msgs::msg::Int32>(
-            "/robot/camera_select", 10,
+            "/funai/camera_select", 10,
             std::bind(&CSICameraNode::camera_select_callback, this, _1));
 
         pub_active_id_ = this->create_publisher<std_msgs::msg::Int32>(
@@ -271,13 +271,13 @@ private:
     
     void stop_stream()
     {
-        // Force kill rpicam-vid to ensure clean state
-        std::system("pkill -9 rpicam-vid 2>/dev/null");
-        
         if (rpicam_pipe_) {
             pclose(rpicam_pipe_);
             rpicam_pipe_ = nullptr;
         }
+
+        // Force kill rpicam-vid to ensure clean state
+        std::system("pkill -9 rpicam-vid 2>/dev/null");
     }
 
     void capture_loop()

@@ -131,7 +131,7 @@ enum class SlotStableState : int
 class RobotLogicNode : public rclcpp::Node
 {
 public:
-    RobotLogicNode() : Node("robot_logic_nova5"), detected_(false), has_button_(false), current_active_camera_(-1)
+    RobotLogicNode() : Node("robot_logic_nova5"), detected_(false), has_button_(false)
     {
         std::vector<std::string> motion_sequence;
         this->declare_parameter("motion_sequence", std::vector<std::string>{});
@@ -273,13 +273,7 @@ public:
             "/cam1Funai/yolo/bounding_boxes", 10,
             std::bind(&RobotLogicNode::detCallback, this, std::placeholders::_1));
 
-        // CSI Camera control - subscribe to active camera ID confirmation
-        camera_active_id_sub_ = this->create_subscription<std_msgs::msg::Int32>(
-            "/camera/active_id", 10,
-            std::bind(&RobotLogicNode::cameraActiveIdCallback, this, std::placeholders::_1));
-        
-        // CSI Camera control - publisher to request camera switch
-        camera_select_pub_ = this->create_publisher<std_msgs::msg::Int32>("/robot/camera_select", 10);
+
 
         // yolov8_sub_camrealsense_ = this->create_subscription<vision_msgs::msg::Detection2DArray>(
         //     "/camrealsense/detections_output", 10,
@@ -398,13 +392,6 @@ private:
     rclcpp::Subscription<std_msgs::msg::Int32MultiArray>::SharedPtr write_values_sub_;
     rclcpp::TimerBase::SharedPtr timer_plc;
 
-    // ========================================================================
-    // CSI CAMERA CONTROL
-    // ========================================================================
-    rclcpp::Subscription<std_msgs::msg::Int32>::SharedPtr camera_active_id_sub_;
-    rclcpp::Publisher<std_msgs::msg::Int32>::SharedPtr camera_select_pub_;
-    std::atomic<int> current_active_camera_;  // 0=cam0, 1=cam1, -1=unknown
-    std::mutex camera_mutex_;
 
     struct DetectionState
     {
@@ -673,12 +660,7 @@ private:
         RCLCPP_INFO(this->get_logger(), "[STEP 5] ✅ Scale check BYPASSED. Proceeding to take cartridge to tray.");
         writeToPLC("192.168.27.6", 185, 4, {1, 2});
         
-        // // USER REQUEST: Switch AND Wait for Camera 1 here
-        // RCLCPP_INFO(this->get_logger(), "[STEP 5] 📸 Switching to Camera 1 (Synchronous)...");
-        // if (!switchAndWaitForCameraWithRetry(1, 3))
-        // {
-        //     RCLCPP_WARN(this->get_logger(), "[STEP 5] ⚠️ Camera switch warning, but proceeding...");
-        // }
+
         
         current_step_ = Step::step_6_take_cartridge_from_scale_to_tray;
         
@@ -691,13 +673,7 @@ private:
     {
         RCLCPP_INFO(this->get_logger(), "[STEP 6] Waiting for Camera 1 ready...");
         
-        // Confirm Camera 1 is active (Switch was triggered in Step 5)
-        // This acts as a barrier to ensure camera is ready for Step 7
-        // if (!switchAndWaitForCameraWithRetry(1, 3))
-        // {
-        //     RCLCPP_ERROR(this->get_logger(), "[STEP 6] ❌ Waiting for Camera 1 timed out. Retrying...");
-        //     return; // Stay in Step 6
-        // }
+
         
         RCLCPP_INFO(this->get_logger(), "[STEP 6] ✅ Camera 1 Active. Proceeding to Step 7.");
         current_step_ = Step::step_7_check_tray_empty_position;
@@ -707,13 +683,6 @@ private:
     {
         RCLCPP_INFO(this->get_logger(), "[STEP 7] Checking empty position on tray...");
         
-        // 1. Ensure Camera 1 is active (Output Tray)
-        // Must switch and confirm success before proceeding
-        if (!switchAndWaitForCameraWithRetry(1, 3))
-        {
-            RCLCPP_WARN(this->get_logger(), "[STEP 7] ⏳ Camera 1 switch failed or not ready. Retrying...");
-            return; // Stay in Step 7 and retry
-        }
 
         // 2. Wait for detection logic to update slot_id
         // (Wait 2s = ~60 frames)
@@ -730,10 +699,6 @@ private:
             // No empty slot found -> Send tray change command immediately
             RCLCPP_WARN(this->get_logger(), "[STEP 7] ⚠️ Tray is FULL (slot_id=%d) -> Sending TRAY CHANGE command 12 to PLC", slot_id);
             writeToPLC("192.168.27.6", 185, 8, {0, 12});
-            
-            // Switch back to Camera 0 for next cycle
-            RCLCPP_INFO(this->get_logger(), "[STEP 7] Requesting switch back to Camera 0...");
-            requestCameraSwitch(0);
             
             current_step_ = Step::step_0_IDLE_state;
         } 
@@ -787,10 +752,6 @@ private:
             RCLCPP_WARN(this->get_logger(), "[STEP 8] ⚠️ No empty slot found (slot_id=%d) -> Sending tray change command 12", slot_id);
             writeToPLC("192.168.27.6", 185, 8, {0, 12});
         }
-        
-        // Optimally switch back to Camera 0 (Input Tray) for next cycle
-        RCLCPP_INFO(this->get_logger(), "[STEP 8] Requesting switch back to Camera 0 for next input cycle...");
-        requestCameraSwitch(0);
         
         current_step_ = Step::step_0_IDLE_state;
         rclcpp::sleep_for(100ms);
@@ -871,124 +832,11 @@ private:
     void enable_robot()
     {
         RCLCPP_INFO(this->get_logger(), "[ENABLE] Enabling Robot...");
-        
-    // Force switch to Camera 0 (Input) on enable
-        RCLCPP_INFO(this->get_logger(), "🚀 Enabling robot - Switching to Camera 0 (Input)");
-        requestCameraSwitch(0);
-        
         callEnable();
         // current_step_ = 0;
     }
 
-    // ========================================================================
-    // CSI CAMERA CONTROL FUNCTIONS
-    // ========================================================================
-    
-    void cameraActiveIdCallback(const std_msgs::msg::Int32::SharedPtr msg)
-    {
-        {
-            std::lock_guard<std::mutex> lock(camera_mutex_);
-            current_active_camera_.store(msg->data);
-        }
-        RCLCPP_INFO(this->get_logger(), "[CAMERA] ✅ Active camera confirmed: %d", msg->data);
-    }
 
-    void requestCameraSwitch(int camera_id)
-    {
-        if (camera_id < 0 || camera_id > 1)
-        {
-            RCLCPP_ERROR(this->get_logger(), "[CAMERA] ❌ Invalid camera ID: %d", camera_id);
-            return;
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(camera_mutex_);
-            if (current_active_camera_.load() == camera_id)
-            {
-                RCLCPP_INFO(this->get_logger(), "[CAMERA] ✅ Camera %d already active", camera_id);
-                return;
-            }
-        }
-
-        auto msg = std::make_shared<std_msgs::msg::Int32>();
-        msg->data = camera_id;
-        camera_select_pub_->publish(*msg);
-
-        RCLCPP_INFO(this->get_logger(), "[CAMERA] 📷 Requesting Camera %d switch...", camera_id);
-    }
-
-    bool waitForCameraActive(int target_camera, double timeout_sec = 20.0)
-    {
-        auto start_time = this->now();
-        RCLCPP_INFO(this->get_logger(), "[CAMERA] ⏳ Waiting for Camera %d confirmation (timeout: %.1fs)...", 
-                    target_camera, timeout_sec);
-
-        while (rclcpp::ok())
-        {
-            {
-                std::lock_guard<std::mutex> lock(camera_mutex_);
-                if (current_active_camera_.load() == target_camera)
-                {
-                    auto elapsed = (this->now() - start_time).seconds();
-                    RCLCPP_INFO(this->get_logger(), "[CAMERA] ✅ Camera %d confirmed active (took %.2fs)", 
-                                target_camera, elapsed);
-                    return true;
-                }
-            }
-
-            auto elapsed = (this->now() - start_time).seconds();
-            if (elapsed > timeout_sec)
-            {
-                RCLCPP_ERROR(this->get_logger(), "[CAMERA] ❌ Timeout waiting for Camera %d (%.1fs elapsed)", 
-                            target_camera, elapsed);
-                return false;
-            }
-
-            rclcpp::sleep_for(std::chrono::milliseconds(100));
-        }
-
-        return false;
-    }
-
-    bool switchAndWaitForCamera(int camera_id)
-    {
-        requestCameraSwitch(camera_id);
-
-        if (!waitForCameraActive(camera_id, 20.0))
-        {
-            return false;
-        }
-
-        RCLCPP_INFO(this->get_logger(), "[CAMERA] 🔄 Waiting 500ms for frame stabilization...");
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-
-        return true;
-    }
-
-    bool switchAndWaitForCameraWithRetry(int camera_id, int max_retries = 3)
-    {
-        for (int attempt = 1; attempt <= max_retries; ++attempt)
-        {
-            RCLCPP_INFO(this->get_logger(), "[CAMERA] 🔄 Attempt %d/%d to switch to Camera %d", 
-                        attempt, max_retries, camera_id);
-
-            if (switchAndWaitForCamera(camera_id))
-            {
-                RCLCPP_INFO(this->get_logger(), "[CAMERA] ✅ Switch successful on attempt %d", attempt);
-                return true;
-            }
-
-            if (attempt < max_retries)
-            {
-                RCLCPP_WARN(this->get_logger(), "[CAMERA] ⚠️ Attempt %d failed, retrying in 2 seconds...", attempt);
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-            }
-        }
-
-        RCLCPP_ERROR(this->get_logger(), "[CAMERA] ❌ Failed to switch to Camera %d after %d attempts", 
-                    camera_id, max_retries);
-        return false;
-    }
 
     void yolov8CallbackCam1(const vision_msgs::msg::Detection2DArray::SharedPtr msg)
     {
