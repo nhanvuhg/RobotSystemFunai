@@ -57,8 +57,6 @@ target_link_libraries(csi_camera_node
 
 target_link_libraries(csi_dual_camera_node
   ${OpenCV_LIBS}
-  spdlog::spdlog
-  fmt::fmt
 )
 
 # Install both nodes

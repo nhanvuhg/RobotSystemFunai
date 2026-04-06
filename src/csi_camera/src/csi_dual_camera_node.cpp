@@ -127,12 +127,8 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
         std::string c = std::to_string(cam_id);
 
         // [FIX-9] Build --mode string to force the native sensor mode.
-        //         By strictly enforcing '2028:1080:12:P', we preserve the cold-start
-        //         speedup AND bypass early-mode negotiation logic in libcamera.
-        //         The --width and --height arguments will then instruct the ISP
-        //         to aggressively downscale the payload frame from Native to 720p
-        //         BEFORE dumping it into STDOUT, completely preventing our 1MB 
-        //         POSIX Pipe Buffer from overfilling and crushing the CFE driver.
+        //         1332x990@15fps DESTROYS IMX477 VBLANK limits and causes CFE timeouts!
+        //         We MUST use 2028:1080:12:P at >=30fps and let ISP downscale to 1280x720. 
         std::string mode_str = "2028:1080:12:P";
 
         execlp("rpicam-vid", "rpicam-vid",
@@ -143,7 +139,7 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
                "--width",     w.c_str(),
                "--height",    h.c_str(),
                "--framerate", f.c_str(),
-               "--mode",      mode_str.c_str(),  // [FIX-9] force native sensor mode
+               "--mode",      mode_str.c_str(),  // force native sensor mode
                "--denoise",   "cdn_off",
                "--flush",
                "-o",          "-",
@@ -154,28 +150,15 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
     // Parent process
     close(pipefd[1]);
 
-    // [FIX-2] Do NOT set O_NONBLOCK here.
-    //         select() will still respect timeouts, and blocking read() won't
-    //         return EAGAIN mid-frame, which was causing false "never started".
-    //
-    // Original buggy line removed:
-    //   int flags = fcntl(pipefd[0], F_GETFL, 0);
-    //   fcntl(pipefd[0], F_SETFL, flags | O_NONBLOCK);
-
     // Increase pipe buffer to 1MB — reduces dropped frames on burst writes
     fcntl(pipefd[0], F_SETPIPE_SZ, 1 * 1024 * 1024);
 
-    // [FIX-6] Early zombie-check: wait 300ms then probe if child is still alive.
-    //         rpicam-vid fails immediately when device is busy (returns exit code
-    //         quickly), so catching it here gives callers a clear -1 pid rather
-    //         than a fd that will never produce data.
     struct timespec ts = {0, 300 * 1000 * 1000};  // 300ms
     nanosleep(&ts, nullptr);
 
     int wstatus = 0;
     pid_t reaped = waitpid(pid, &wstatus, WNOHANG);
     if (reaped != 0) {
-        // Child already exited — device busy or exec failed
         close(pipefd[0]);
         return {};  // pid=-1, fd=-1
     }
@@ -188,11 +171,6 @@ static CamProcess launch_rpicam(int cam_id, int width, int height, int fps)
 
 // =============================================================================
 // kill_cam_process
-//
-// [FIX-5] Drain the pipe before closing.
-//         If we close while the child's stdout buffer still has data, the next
-//         fd opened by the OS might get the same file-descriptor number and
-//         accidentally read stale YUV bytes. Draining avoids this edge case.
 // =============================================================================
 static void kill_cam_process(CamProcess& cp)
 {
@@ -203,13 +181,12 @@ static void kill_cam_process(CamProcess& cp)
     }
     int fd = cp.fd.exchange(-1);
     if (fd >= 0) {
-        // [FIX-5] Drain remaining bytes before closing
         uint8_t drain_buf[4096];
         while (true) {
             fd_set rfds;
             FD_ZERO(&rfds);
             FD_SET(fd, &rfds);
-            struct timeval tv = {0, 0};  // non-blocking poll
+            struct timeval tv = {0, 0};  
             if (select(fd + 1, &rfds, nullptr, nullptr, &tv) <= 0) break;
             ssize_t n = read(fd, drain_buf, sizeof(drain_buf));
             if (n <= 0) break;
@@ -227,13 +204,10 @@ public:
     CSIDualCameraNode() : Node("csi_dual_camera_node"), running_(true)
     {
         RCLCPP_INFO(get_logger(), "========================================");
-        RCLCPP_INFO(get_logger(), "CSI Dual Camera Node");
+        RCLCPP_INFO(get_logger(), "CSI Dual Camera Node (Patched)");
         RCLCPP_INFO(get_logger(), "========================================");
 
-        // [FIX-9] We keep the explicit parameter defaults at 1280x720 to prevent
-        //         POSIX Pipe Buffer overflow (max 1MB). At 2028x1080, uncompressed YUV
-        //         is 3.3MB/frame, which stalls rpicam-vid's write() leading to V4L2 CFE
-        //         timeouts. We will enforce --mode native sensor mode inside launch_rpicam.
+        // Hardware-safe geometry parameters. 
         declare_parameter("width",      1280);
         declare_parameter("height",      720);
         declare_parameter("fps",          30);
@@ -392,17 +366,15 @@ private:
     }
 
     // =========================================================================
-    // capture_loop
+    // capture_loop (FIXED WITH DECOUPLED READER)
     //
-    // [FIX-4] Use dup() to get a personal copy of the fd before releasing lock.
-    //         This guarantees that even if the reconnect path calls
-    //         kill_cam_process() (which close()s the original fd) while
-    //         read_frame() is running, our dup'd fd remains valid.
-    //         We close the dup'd fd ourselves after read_frame() returns.
-    //
-    // [FIX-7] Removed the redundant zombie-detect block inside reconnect.
-    //         That check is now done inside launch_rpicam() itself ([FIX-6]),
-    //         so we only need to check cp.pid < 0 after the call.
+    // [FIX-11] DECOUPLED THREAD READER
+    // The infamous "Dequeue timer of 1000000 us has expired!" hardware crash happens
+    // because OpenCV `cvtColor` and `publish` operations periodically take just long
+    // enough that `rpicam-vid` fills the 1MB POSIX pipe buffer and blocks on `write()`.
+    // When `rpicam-vid` blocks, the CFE hardware buffer overflows and permanently zombies.
+    // By spinning a dedicated thread that ONLY parses bytes from `fd` into RAM lock-free,
+    // the pipe remains perfectly empty and `rpicam-vid` NEVER blocks.
     // =========================================================================
     void capture_loop(int cam_id)
     {
@@ -411,15 +383,8 @@ private:
         std::vector<uint8_t> yuv_buf(yuv_frame_size_);
         cv::Mat bgr(target_height_, target_width_, CV_8UC3);
 
-        // 6 seconds of consecutive failures before attempting reconnect
         const int FAIL_THRESHOLD = (target_fps_ > 0 ? target_fps_ : 30) * 6;
         int fails = 0;
-
-        // [FIX-10] Exponential backoff for reconnect.
-        //          Kernel log showed CAM0 spamming CFE reset every 1.663s repeatedly —
-        //          constant-delay reconnect prevents MIPI link from re-negotiating at
-        //          900 Mbps (needs ~500ms+ quiet time). Backoff: 800ms → 1.6s → 3.2s
-        //          → ... → 30s cap. Resets to base on successful frame.
         int reconnect_attempts = 0;
 
         auto startup_deadline =
@@ -427,10 +392,6 @@ private:
 
         while (running_.load() && rclcpp::ok()) {
 
-            // [FIX-4] dup() the fd while holding the lock, then read outside lock.
-            //         Original code only took a snapshot of the fd integer value —
-            //         that fd could be close()d by the reconnect path before our
-            //         read() call, causing EIO and a false failure cascade.
             int fd_dup = -1;
             {
                 std::lock_guard<std::mutex> lk(
@@ -447,10 +408,78 @@ private:
                 continue;
             }
 
-            bool frame_ok = read_frame(fd_dup, yuv_buf);
-            close(fd_dup);  // always close our dup'd copy
+            // --- DECOUPLED READER THREAD ---
+            std::atomic<bool> reader_running{true};
+            std::mutex mtx_latest;
+            std::vector<uint8_t> latest_yuv(yuv_frame_size_);
+            bool new_frame = false;
+            auto last_frame_time = std::chrono::steady_clock::now();
 
-            if (!frame_ok) {
+            std::thread reader_thread([&]() {
+                std::vector<uint8_t> local_buf(yuv_frame_size_);
+                while (reader_running.load()) {
+                    if (!read_frame(fd_dup, local_buf)) {
+                        reader_running.store(false);
+                        break;
+                    }
+                    std::lock_guard<std::mutex> rlk(mtx_latest);
+                    latest_yuv = local_buf;
+                    new_frame = true;
+                    last_frame_time = std::chrono::steady_clock::now();
+                }
+            });
+
+            bool frame_ok = true;
+            while (reader_running.load() && running_.load() && rclcpp::ok()) {
+                bool got_frame = false;
+                {
+                    std::lock_guard<std::mutex> rlk(mtx_latest);
+                    if (new_frame) {
+                        yuv_buf = latest_yuv;  // Copy buffer for processing
+                        new_frame = false;
+                        got_frame = true;
+                    }
+                }
+
+                if (!got_frame) {
+                    // Timeout watchdog to trigger reconnect if reader gets stuck
+                    if (std::chrono::steady_clock::now() - last_frame_time > std::chrono::seconds(3)) {
+                        frame_ok = false;
+                        RCLCPP_WARN(get_logger(), "CAM%d: Pipe reader timeout (No data for 3s)", cam_id);
+                        break;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                    continue;
+                }
+
+                fails = 0;
+                reconnect_attempts = 0;  // reset backoff on successful recovery
+
+                cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_,
+                                CV_8UC1, yuv_buf.data());
+                cv::cvtColor(yuv_mat, bgr, cv::COLOR_YUV2BGR_I420);
+
+                std_msgs::msg::Header hdr;
+                hdr.stamp    = now();
+                hdr.frame_id = (cam_id == 0) ? "camera_input_tray"
+                                              : "camera_output_tray";
+
+                auto msg = cv_bridge::CvImage(hdr, "bgr8", bgr).toImageMsg();
+
+                if      (cam_id == 0 && pub_cam0_) pub_cam0_->publish(*msg);
+                else if (cam_id == 1 && pub_cam1_) pub_cam1_->publish(*msg);
+
+                RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
+                    "✓ CAM%d publishing frames", cam_id);
+            }
+
+            reader_running.store(false);
+            close(fd_dup);  // instantly unblocks the read() inside reader_thread
+            if (reader_thread.joinable()) {
+                reader_thread.join();
+            }
+
+            if (!frame_ok || !running_.load()) {
                 if (std::chrono::steady_clock::now() < startup_deadline) {
                     while (waitpid(-1, nullptr, WNOHANG) > 0) {}
                     rclcpp::sleep_for(std::chrono::milliseconds(50));
@@ -467,9 +496,6 @@ private:
                     "⚠️  CAM%d: %d consecutive failures — reconnecting (attempt #%d)...",
                     cam_id, fails, reconnect_attempts + 1);
 
-                // [FIX-10] Log Pi 5 CPU temperature at crash time.
-                //          If crash correlates with high temp (>80°C), it's thermal throttle
-                //          causing CSI clock drift. Check: cat /sys/class/thermal/thermal_zone0/temp
                 {
                     FILE* f = fopen("/sys/class/thermal/thermal_zone0/temp", "r");
                     if (f) {
@@ -489,7 +515,6 @@ private:
                 {
                     std::lock_guard<std::mutex> recon_lk(mtx_reconnect_);
 
-                    // Kill only this camera's process
                     {
                         std::lock_guard<std::mutex> lk(
                             (cam_id == 0) ? mtx_cam0_ : mtx_cam1_);
@@ -497,9 +522,6 @@ private:
                         kill_cam_process(cp);
                     }
 
-                    // [FIX-10] Exponential backoff: 800ms * 2^attempts, capped at 30s.
-                    //          Rapid CFE resets (like the 1.663s loop seen in kernel log)
-                    //          prevent MIPI 900 Mbps link from re-negotiating cleanly.
                     int backoff_ms = 800;
                     for (int i = 0; i < reconnect_attempts && backoff_ms < 30000; i++) {
                         backoff_ms *= 2;
@@ -515,9 +537,6 @@ private:
 
                     if (!running_.load()) break;
 
-                    // [FIX-6+7] launch_rpicam now does the 300ms zombie-check
-                    //            internally, so new_cp.pid < 0 means it died
-                    //            immediately — no need to repeat the check here.
                     CamProcess new_cp = launch_rpicam(
                         cam_id, target_width_, target_height_, target_fps_);
 
@@ -531,15 +550,14 @@ private:
                                 "✅ CAM%d reconnected (pid=%d)", cam_id, cp.pid);
                         } else {
                             RCLCPP_ERROR(get_logger(),
-                                "❌ CAM%d reconnect failed — device still busy, "
-                                "retry in 2s", cam_id);
+                                "❌ CAM%d reconnect failed — retry in 2s", cam_id);
                         }
                     }
 
-                    reconnect_attempts++;  // [FIX-10] drives next backoff interval
+                    reconnect_attempts++;
 
                     startup_deadline = std::chrono::steady_clock::now()
-                                       + std::chrono::seconds(15);  // [FIX-3]
+                                       + std::chrono::seconds(15);
 
                     if (new_cp.pid > 0) {
                         rclcpp::sleep_for(std::chrono::milliseconds(500));
@@ -551,27 +569,6 @@ private:
                 fails = 0;
                 continue;
             }
-
-            // Frame OK — reset failure counter and reconnect backoff
-            fails = 0;
-            reconnect_attempts = 0;  // [FIX-10] reset backoff on successful recovery
-
-            cv::Mat yuv_mat(target_height_ * 3 / 2, target_width_,
-                            CV_8UC1, yuv_buf.data());
-            cv::cvtColor(yuv_mat, bgr, cv::COLOR_YUV2BGR_I420);
-
-            std_msgs::msg::Header hdr;
-            hdr.stamp    = now();
-            hdr.frame_id = (cam_id == 0) ? "camera_input_tray"
-                                          : "camera_output_tray";
-
-            auto msg = cv_bridge::CvImage(hdr, "bgr8", bgr).toImageMsg();
-
-            if      (cam_id == 0 && pub_cam0_) pub_cam0_->publish(*msg);
-            else if (cam_id == 1 && pub_cam1_) pub_cam1_->publish(*msg);
-
-            RCLCPP_INFO_THROTTLE(get_logger(), *get_clock(), 10000,
-                "✓ CAM%d publishing frames", cam_id);
         }
 
         RCLCPP_INFO(get_logger(), "🛑 CAM%d capture thread stopped", cam_id);

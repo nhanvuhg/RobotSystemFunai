@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-
 import launch
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
@@ -23,13 +22,13 @@ def generate_launch_description():
     launch_args = [
         DeclareLaunchArgument(
             'model_path_cam0',
-            default_value='./src/hailort_yolo_common/weights/yolov8s.hef',
-            description='HEF model path for cam0.'
+            default_value='/home/pi/input_1_yolov8s.hef',
+            description='HEF model path for Cam0 (Input Tray).'
         ),
         DeclareLaunchArgument(
             'model_path_cam1',
-            default_value='./src/hailort_yolo_common/weights/yolov8s.hef',
-            description='HEF model path for cam1.'
+            default_value='/home/pi/yolov8s_trayoutput.hef',
+            description='HEF model path for Cam1 (Output Tray).'
         ),
         DeclareLaunchArgument(
             'class_labels_path',
@@ -48,7 +47,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             'imshow_isshow',
-            default_value='true',
+            default_value='false',  # Default false for headless robot
             description=''
         ),
         DeclareLaunchArgument(
@@ -62,8 +61,9 @@ def generate_launch_description():
         name='yolo_container',
         namespace='',
         package='rclcpp_components',
-        executable='component_container_mt',
+        executable='component_container',
         composable_node_descriptions=[
+            # CAM 0 NODE (Input Tray)
             ComposableNode(
                 package='yolo_ros_hailort_cpp',
                 plugin='yolo_ros_hailort_cpp::YoloNode',
@@ -74,14 +74,14 @@ def generate_launch_description():
                     'conf': LaunchConfiguration('conf'),
                     'nms': LaunchConfiguration('nms'),
                     'imshow_isshow': LaunchConfiguration('imshow_isshow'),
-                    'src_image_topic_name': '/cam0Funai/image_raw',
-                    'publish_image_topic_name': '/cam0/yolo/image_raw',
-                    'publish_boundingbox_topic_name': '/cam0/yolo/bounding_boxes',
+                    'src_image_topic_name': 'cam0Funai/image_raw',
+                    'publish_image_topic_name': 'cam0Funai/yolo/image_raw',
+                    'publish_boundingbox_topic_name': '/cam0Funai/yolo/bounding_boxes',
                     'publish_resized_image': False,
                     'nms_output_name': LaunchConfiguration('nms_output_name'),
-                }],
-                extra_arguments=[{'use_intra_process_comms': True}],
+                }]
             ),
+            # CAM 1 NODE (Output Tray)
             ComposableNode(
                 package='yolo_ros_hailort_cpp',
                 plugin='yolo_ros_hailort_cpp::YoloNode',
@@ -92,13 +92,12 @@ def generate_launch_description():
                     'conf': LaunchConfiguration('conf'),
                     'nms': LaunchConfiguration('nms'),
                     'imshow_isshow': LaunchConfiguration('imshow_isshow'),
-                    'src_image_topic_name': '/cam1Funai/image_raw',
-                    'publish_image_topic_name': '/cam1/yolo/image_raw',
-                    'publish_boundingbox_topic_name': '/cam1/yolo/bounding_boxes',
+                    'src_image_topic_name': 'cam1Funai/image_raw',
+                    'publish_image_topic_name': 'cam1Funai/yolo/image_raw',
+                    'publish_boundingbox_topic_name': '/cam1Funai/yolo/bounding_boxes',
                     'publish_resized_image': False,
                     'nms_output_name': LaunchConfiguration('nms_output_name'),
-                }],
-                extra_arguments=[{'use_intra_process_comms': True}],
+                }]
             ),
         ],
         output='screen',

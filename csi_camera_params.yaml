@@ -1,0 +1,17 @@
+csi_camera_node:
+  ros__parameters:
+    # Camera I2C Channel Mapping (UC-C44 Multiplexer)
+    # -----------------------------------------------
+    # 1 = Port 1 (Physical)
+    # 2 = Port 2 (Physical)
+    
+    # Input Tray Camera (Cam 0)
+    cam0_channel: 2
+    
+    # Output Tray Camera (Cam 1)
+    cam1_channel: 1
+    
+    # Other settings
+    width: 1280
+    height: 720
+    fps: 30
